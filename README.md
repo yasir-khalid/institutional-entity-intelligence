@@ -115,3 +115,76 @@ uv run pytest
 Out of scope for this phase: match scoring/decisions, gold dataset, external
 sources (SEC/FCA/Companies House), relationship-graph resolution. See the project
 plan for the full roadmap.
+
+## Phase 2: full processed schema, ISIN bridge, validation, auto-generated benchmark
+
+Turns all four raw GLEIF files into a complete, provenance-tracked processed layer,
+and uses the ISIN↔LEI mapping as a **deterministic identifier bridge** to
+auto-generate ER benchmark data instead of hand-labeling records: any GLEIF entity
+that also appears in the ISIN↔LEI file has an independently-known correct answer
+(its LEI) that didn't come from our own name-normalization logic — a trustworthy
+positive label. Combined with intra-GLEIF "confusable" entity groups (same core
+name, different fund number / master-feeder flag), this produces a large,
+adversarial-aware evaluation set for free.
+
+```
+data/
+├── raw/            # immutable — never modified by any code path
+│   ├── ...lei2...zip, ...rr...zip, ...repex...zip, isin-lei-...zip
+│
+├── processed/
+│   ├── gleif_entities.parquet                 (raw + normalized fields, provenance)
+│   ├── gleif_relationships.parquet
+│   ├── gleif_relationship_exceptions.parquet  (renamed from gleif_exceptions.parquet)
+│   ├── isin_lei.parquet                       (new: ISIN <-> LEI identifier bridge)
+│   └── validation_report.json                 (row counts, null rates, coverage %)
+│
+└── benchmark/
+    ├── positives.parquet         # every entity independently confirmed via ISIN
+    ├── hard_negatives.parquet    # confusable entity pairs (fund II vs III, master/feeder)
+    └── evaluation_pairs.parquet  # curated sample of both, ready for a future scoring harness
+```
+
+Entities gain raw/normalized *pairs* that were missing in Phase 1 —
+`legal_form_code`/`legal_form_other`, `registration_id`/`registration_id_norm`,
+`legal_address_line1`/`legal_address_norm` (and the `hq_` equivalents) — plus
+`entity_creation_date` and provenance columns (`source_file`, `snapshot_date`,
+`ingested_at`) on every processed table. Raw values are never overwritten.
+
+Address normalization uses **libpostal** (`postal.parser.parse_address`) rather than
+naive string concatenation — it's a statistical parser trained on real-world postal
+data, so it handles word-order/punctuation/abbreviation variation across sources far
+better than regex would. Requires the native library first (macOS/Homebrew; ships
+its own ~2GB trained model data bundled in the bottle):
+
+```bash
+brew install libpostal
+# the `postal` Python binding is a C extension with no prebuilt wheel - point it at
+# Homebrew's headers/lib before syncing:
+CFLAGS="-I/opt/homebrew/include" LDFLAGS="-L/opt/homebrew/lib" uv sync
+```
+
+Validation and benchmark generation use **DuckDB** to query the Parquet files
+directly — joins, self-joins, group-bys and stratified sampling as plain SQL over
+files that don't fit comfortably in a single in-memory pass, rather than hand-rolled
+Python loops or fighting pyarrow's join limitations (it refuses to join on
+list-typed columns, which is why `positives.parquet` stores `sample_isin`/
+`isin_count` rather than a full ISIN list).
+
+### Run
+
+```bash
+# 1. Parse all 4 raw GLEIF files -> Parquet (re-run after Phase 1: adds isin_lei
+#    and the new entity fields; ~10-12 min end to end)
+uv run python -m er.ingestion.gleif
+
+# 2. Validate the processed tables (uniqueness, malformed IDs, coverage, null rates)
+uv run python -m er.validation
+
+# 3. Generate the auto-labeled benchmark from the ISIN bridge + confusable-name groups
+uv run python -m er.benchmark.generate
+```
+
+Out of scope for this phase (still on the roadmap): actually scoring against
+`evaluation_pairs.parquet`, deterministic/ML match decisions, external sources
+(SEC/FCA/Companies House), relationship-graph resolution.

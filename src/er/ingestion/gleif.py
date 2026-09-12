@@ -10,20 +10,26 @@ from __future__ import annotations
 import logging
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
+import duckdb
 from lxml import etree
 
 from er.config import AppConfig, load_config
 from er.ingestion.parquet_writer import (
     ENTITY_SCHEMA,
-    EXCEPTION_SCHEMA,
+    ISIN_LEI_SCHEMA,
+    RELATIONSHIP_EXCEPTION_SCHEMA,
     RELATIONSHIP_SCHEMA,
     BatchedParquetWriter,
 )
+from er.ingestion.isin_lei import parse_isin_lei
 from er.normalisation.addresses import (
+    normalize_address_line,
     normalize_city,
     normalize_country,
+    normalize_identifier,
     normalize_postcode,
     postcode_outward,
 )
@@ -42,6 +48,40 @@ def _open_zip_member(zip_path: Path):
     zf = zipfile.ZipFile(zip_path)
     (name,) = zf.namelist()
     return zf.open(name)
+
+
+def _ingested_at() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _dedupe_entities_by_lei(path: Path) -> int:
+    """GLEIF's concatenated file merges dozens of per-LOU source feeds (visible in its
+    own header as separate <gleif:Source> blocks) and occasionally emits the same LEI
+    twice with only last_update_date differing - a near-simultaneous-update artifact of
+    that merge, not a real second entity. LEI must be a true unique key downstream (the
+    ISIN-bridge join, OpenSearch _id), so keep only the most-recently-updated row.
+    """
+    tmp_path = path.with_suffix(".dedup.parquet")
+    con = duckdb.connect()
+    con.execute(f"""
+        COPY (
+            SELECT * EXCLUDE (rn) FROM (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY lei ORDER BY last_update_date DESC NULLS LAST
+                ) AS rn
+                FROM read_parquet('{path}')
+            )
+            WHERE rn = 1
+        ) TO '{tmp_path}' (FORMAT PARQUET)
+    """)
+    (before,) = con.sql(f"SELECT COUNT(*) FROM read_parquet('{path}')").fetchone()
+    (after,) = con.sql(f"SELECT COUNT(*) FROM read_parquet('{tmp_path}')").fetchone()
+    con.close()
+    tmp_path.replace(path)
+    removed = before - after
+    if removed:
+        logger.info("entities: removed %d duplicate-LEI rows (kept most recent)", removed)
+    return after
 
 
 def _clear_element(elem: etree._Element) -> None:
@@ -76,12 +116,26 @@ def parse_entities(cfg: AppConfig) -> int:
     out_path = cfg.gleif.processed_dir / "gleif_entities.parquet"
     writer = BatchedParquetWriter(out_path, ENTITY_SCHEMA, cfg.gleif.batch_size)
 
+    ingested_at = _ingested_at()
+    source_file = zip_path.name
+    snapshot_date: str | None = None
+
     started = time.monotonic()
     stream = _open_zip_member(zip_path)
-    context = etree.iterparse(stream, tag=f"{{{ns}}}LEIRecord")
+    context = etree.iterparse(
+        stream, tag=(f"{{{ns}}}ContentDate", f"{{{ns}}}LEIRecord")
+    )
 
     count = 0
-    for _, record in context:
+    for _, elem in context:
+        if elem.tag == f"{{{ns}}}ContentDate":
+            if snapshot_date is None:
+                text = _text(elem)
+                snapshot_date = text[:10] if text else None
+            _clear_element(elem)
+            continue
+
+        record = elem
         lei = _text(record.find(f"{{{ns}}}LEI"))
         entity = record.find(f"{{{ns}}}Entity")
         registration = record.find(f"{{{ns}}}Registration")
@@ -109,6 +163,12 @@ def parse_entities(cfg: AppConfig) -> int:
 
         name_fields = build_name_fields(legal_name or "")
         legal_postcode_norm = normalize_postcode(legal_addr.get("postcode"))
+        hq_postcode_norm = normalize_postcode(hq_addr.get("postcode"))
+        registration_id_raw = (
+            _text(reg_authority.find(f"{{{ns}}}RegistrationAuthorityEntityID"))
+            if reg_authority is not None
+            else None
+        )
 
         row = {
             "lei": lei,
@@ -121,19 +181,36 @@ def parse_entities(cfg: AppConfig) -> int:
             "entity_category": _text(entity.find(f"{{{ns}}}EntityCategory")) if entity is not None else None,
             "jurisdiction": _text(entity.find(f"{{{ns}}}LegalJurisdiction")) if entity is not None else None,
             "legal_form_code": _text(legal_form.find(f"{{{ns}}}EntityLegalFormCode")) if legal_form is not None else None,
+            "legal_form_other": _text(legal_form.find(f"{{{ns}}}OtherLegalForm")) if legal_form is not None else None,
             "registration_authority_id": _text(reg_authority.find(f"{{{ns}}}RegistrationAuthorityID")) if reg_authority is not None else None,
-            "registration_id": _text(reg_authority.find(f"{{{ns}}}RegistrationAuthorityEntityID")) if reg_authority is not None else None,
+            "registration_id": registration_id_raw,
+            "registration_id_norm": normalize_identifier(registration_id_raw),
             "registration_status": _text(registration.find(f"{{{ns}}}RegistrationStatus")) if registration is not None else None,
             "legal_address_line1": legal_addr.get("line1"),
             "legal_city": normalize_city(legal_addr.get("city")),
             "legal_region": legal_addr.get("region"),
             "legal_postcode": legal_postcode_norm,
             "legal_country": normalize_country(legal_addr.get("country")),
+            "legal_address_norm": normalize_address_line(
+                legal_addr.get("line1"),
+                legal_addr.get("city"),
+                legal_addr.get("region"),
+                legal_addr.get("postcode"),
+                legal_addr.get("country"),
+            ),
             "hq_address_line1": hq_addr.get("line1"),
             "hq_city": normalize_city(hq_addr.get("city")),
             "hq_region": hq_addr.get("region"),
-            "hq_postcode": normalize_postcode(hq_addr.get("postcode")),
+            "hq_postcode": hq_postcode_norm,
             "hq_country": normalize_country(hq_addr.get("country")),
+            "hq_address_norm": normalize_address_line(
+                hq_addr.get("line1"),
+                hq_addr.get("city"),
+                hq_addr.get("region"),
+                hq_addr.get("postcode"),
+                hq_addr.get("country"),
+            ),
+            "entity_creation_date": _text(entity.find(f"{{{ns}}}EntityCreationDate")) if entity is not None else None,
             "initial_registration_date": _text(registration.find(f"{{{ns}}}InitialRegistrationDate")) if registration is not None else None,
             "last_update_date": _text(registration.find(f"{{{ns}}}LastUpdateDate")) if registration is not None else None,
             "next_renewal_date": _text(registration.find(f"{{{ns}}}NextRenewalDate")) if registration is not None else None,
@@ -144,6 +221,9 @@ def parse_entities(cfg: AppConfig) -> int:
             "is_feeder": name_fields["is_feeder"],
             "is_offshore": name_fields["is_offshore"],
             "is_domestic": name_fields["is_domestic"],
+            "source_file": source_file,
+            "snapshot_date": snapshot_date,
+            "ingested_at": ingested_at,
         }
         writer.add(row)
         count += 1
@@ -155,8 +235,9 @@ def parse_entities(cfg: AppConfig) -> int:
 
     writer.close()
     stream.close()
-    logger.info("entities: done, %d records -> %s", count, out_path)
-    return count
+    final_count = _dedupe_entities_by_lei(out_path)
+    logger.info("entities: done, %d records parsed, %d after dedup -> %s", count, final_count, out_path)
+    return final_count
 
 
 def parse_relationships(cfg: AppConfig) -> int:
@@ -165,12 +246,26 @@ def parse_relationships(cfg: AppConfig) -> int:
     out_path = cfg.gleif.processed_dir / "gleif_relationships.parquet"
     writer = BatchedParquetWriter(out_path, RELATIONSHIP_SCHEMA, cfg.gleif.batch_size)
 
+    ingested_at = _ingested_at()
+    source_file = zip_path.name
+    snapshot_date: str | None = None
+
     started = time.monotonic()
     stream = _open_zip_member(zip_path)
-    context = etree.iterparse(stream, tag=f"{{{ns}}}RelationshipRecord")
+    context = etree.iterparse(
+        stream, tag=(f"{{{ns}}}ContentDate", f"{{{ns}}}RelationshipRecord")
+    )
 
     count = 0
-    for _, record in context:
+    for _, elem in context:
+        if elem.tag == f"{{{ns}}}ContentDate":
+            if snapshot_date is None:
+                text = _text(elem)
+                snapshot_date = text[:10] if text else None
+            _clear_element(elem)
+            continue
+
+        record = elem
         rel = record.find(f"{{{ns}}}Relationship")
         start_node = rel.find(f"{{{ns}}}StartNode") if rel is not None else None
         end_node = rel.find(f"{{{ns}}}EndNode") if rel is not None else None
@@ -199,6 +294,9 @@ def parse_relationships(cfg: AppConfig) -> int:
             "relationship_status": _text(rel.find(f"{{{ns}}}RelationshipStatus")) if rel is not None else None,
             "start_date": start_date,
             "end_date": end_date,
+            "source_file": source_file,
+            "snapshot_date": snapshot_date,
+            "ingested_at": ingested_at,
         }
         writer.add(row)
         count += 1
@@ -214,22 +312,37 @@ def parse_relationships(cfg: AppConfig) -> int:
     return count
 
 
-def parse_exceptions(cfg: AppConfig) -> int:
+def parse_relationship_exceptions(cfg: AppConfig) -> int:
     ns = REPEX_NS
     zip_path = cfg.gleif.raw_dir / cfg.gleif.exceptions_zip
-    out_path = cfg.gleif.processed_dir / "gleif_exceptions.parquet"
-    writer = BatchedParquetWriter(out_path, EXCEPTION_SCHEMA, cfg.gleif.batch_size)
+    out_path = cfg.gleif.processed_dir / "gleif_relationship_exceptions.parquet"
+    writer = BatchedParquetWriter(out_path, RELATIONSHIP_EXCEPTION_SCHEMA, cfg.gleif.batch_size)
+
+    ingested_at = _ingested_at()
+    source_file = zip_path.name
+    snapshot_date: str | None = None
 
     started = time.monotonic()
     stream = _open_zip_member(zip_path)
-    context = etree.iterparse(stream, tag=f"{{{ns}}}Exception")
+    context = etree.iterparse(stream, tag=(f"{{{ns}}}ContentDate", f"{{{ns}}}Exception"))
 
     count = 0
-    for _, record in context:
+    for _, elem in context:
+        if elem.tag == f"{{{ns}}}ContentDate":
+            if snapshot_date is None:
+                text = _text(elem)
+                snapshot_date = text[:10] if text else None
+            _clear_element(elem)
+            continue
+
+        record = elem
         row = {
             "lei": _text(record.find(f"{{{ns}}}LEI")),
             "exception_category": _text(record.find(f"{{{ns}}}ExceptionCategory")),
             "exception_reason": _text(record.find(f"{{{ns}}}ExceptionReason")),
+            "source_file": source_file,
+            "snapshot_date": snapshot_date,
+            "ingested_at": ingested_at,
         }
         writer.add(row)
         count += 1
@@ -237,11 +350,11 @@ def parse_exceptions(cfg: AppConfig) -> int:
 
         if count % LOG_EVERY == 0:
             elapsed = time.monotonic() - started
-            logger.info("exceptions: %d parsed (%.0fs)", count, elapsed)
+            logger.info("relationship_exceptions: %d parsed (%.0fs)", count, elapsed)
 
     writer.close()
     stream.close()
-    logger.info("exceptions: done, %d records -> %s", count, out_path)
+    logger.info("relationship_exceptions: done, %d records -> %s", count, out_path)
     return count
 
 
@@ -250,12 +363,14 @@ def main() -> None:
     cfg = load_config()
     n_entities = parse_entities(cfg)
     n_rels = parse_relationships(cfg)
-    n_exceptions = parse_exceptions(cfg)
+    n_exceptions = parse_relationship_exceptions(cfg)
+    n_isin_lei = parse_isin_lei(cfg)
     logger.info(
-        "ingestion complete: %d entities, %d relationships, %d exceptions",
+        "ingestion complete: %d entities, %d relationships, %d relationship_exceptions, %d isin_lei",
         n_entities,
         n_rels,
         n_exceptions,
+        n_isin_lei,
     )
 
 

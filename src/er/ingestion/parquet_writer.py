@@ -6,6 +6,12 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+_PROVENANCE_FIELDS = [
+    ("source_file", pa.string()),
+    ("snapshot_date", pa.string()),
+    ("ingested_at", pa.string()),
+]
+
 ENTITY_SCHEMA = pa.schema(
     [
         ("lei", pa.string()),
@@ -18,19 +24,24 @@ ENTITY_SCHEMA = pa.schema(
         ("entity_category", pa.string()),
         ("jurisdiction", pa.string()),
         ("legal_form_code", pa.string()),
+        ("legal_form_other", pa.string()),
         ("registration_authority_id", pa.string()),
         ("registration_id", pa.string()),
+        ("registration_id_norm", pa.string()),
         ("registration_status", pa.string()),
         ("legal_address_line1", pa.string()),
         ("legal_city", pa.string()),
         ("legal_region", pa.string()),
         ("legal_postcode", pa.string()),
         ("legal_country", pa.string()),
+        ("legal_address_norm", pa.string()),
         ("hq_address_line1", pa.string()),
         ("hq_city", pa.string()),
         ("hq_region", pa.string()),
         ("hq_postcode", pa.string()),
         ("hq_country", pa.string()),
+        ("hq_address_norm", pa.string()),
+        ("entity_creation_date", pa.string()),
         ("initial_registration_date", pa.string()),
         ("last_update_date", pa.string()),
         ("next_renewal_date", pa.string()),
@@ -41,6 +52,7 @@ ENTITY_SCHEMA = pa.schema(
         ("is_feeder", pa.bool_()),
         ("is_offshore", pa.bool_()),
         ("is_domestic", pa.bool_()),
+        *_PROVENANCE_FIELDS,
     ]
 )
 
@@ -54,14 +66,24 @@ RELATIONSHIP_SCHEMA = pa.schema(
         ("relationship_status", pa.string()),
         ("start_date", pa.string()),
         ("end_date", pa.string()),
+        *_PROVENANCE_FIELDS,
     ]
 )
 
-EXCEPTION_SCHEMA = pa.schema(
+RELATIONSHIP_EXCEPTION_SCHEMA = pa.schema(
     [
         ("lei", pa.string()),
         ("exception_category", pa.string()),
         ("exception_reason", pa.string()),
+        *_PROVENANCE_FIELDS,
+    ]
+)
+
+ISIN_LEI_SCHEMA = pa.schema(
+    [
+        ("isin", pa.string()),
+        ("lei", pa.string()),
+        *_PROVENANCE_FIELDS,
     ]
 )
 

@@ -4,6 +4,7 @@ gleif:
   entities_zip: 20260911-gleif-concatenated-file-lei2.xml.6aa3c8c8d917c.zip
   relationships_zip: 20260911-gleif-concatenated-file-rr.xml.6aa3c5ef411c5.zip
   exceptions_zip: 20260911-gleif-concatenated-file-repex.xml.6aa3c6d719a6d.zip
+  isin_lei_zip: isin-lei-20260911T071509.zip
   batch_size: 50000
 
 opensearch:
@@ -14,3 +15,10 @@ opensearch:
 
 search:
   default_size: 20
+
+benchmark:
+  output_dir: data/benchmark
+  seed: 42
+  eval_sample_size: 5000
+  min_core_tokens: 3
+  max_confusable_group_size: 10

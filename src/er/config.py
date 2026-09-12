@@ -19,7 +19,16 @@ class GleifConfig(BaseModel):
     entities_zip: str
     relationships_zip: str
     exceptions_zip: str
+    isin_lei_zip: str
     batch_size: int = 50_000
+
+
+class BenchmarkConfig(BaseModel):
+    output_dir: Path
+    seed: int = 42
+    eval_sample_size: int = 5000
+    min_core_tokens: int = 3
+    max_confusable_group_size: int = 10
 
 
 class OpenSearchConfig(BaseModel):
@@ -37,6 +46,7 @@ class AppConfig(BaseModel):
     gleif: GleifConfig
     opensearch: OpenSearchConfig
     search: SearchConfig
+    benchmark: BenchmarkConfig
 
     @property
     def opensearch_url(self) -> str:
@@ -53,4 +63,5 @@ def load_config(path: str | Path = REPO_ROOT / "config" / "dev.yaml") -> AppConf
     raw = yaml.safe_load(Path(path).read_text())
     raw["gleif"]["raw_dir"] = REPO_ROOT / raw["gleif"]["raw_dir"]
     raw["gleif"]["processed_dir"] = REPO_ROOT / raw["gleif"]["processed_dir"]
+    raw["benchmark"]["output_dir"] = REPO_ROOT / raw["benchmark"]["output_dir"]
     return AppConfig.model_validate(raw)

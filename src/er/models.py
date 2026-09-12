@@ -15,9 +15,11 @@ class GleifEntity(BaseModel):
     entity_category: str | None = None
     jurisdiction: str | None = None
     legal_form_code: str | None = None
+    legal_form_other: str | None = None
 
     registration_authority_id: str | None = None
     registration_id: str | None = None
+    registration_id_norm: str | None = None
     registration_status: str | None = None
 
     legal_address_line1: str | None = None
@@ -25,13 +27,16 @@ class GleifEntity(BaseModel):
     legal_region: str | None = None
     legal_postcode: str | None = None
     legal_country: str | None = None
+    legal_address_norm: str | None = None
 
     hq_address_line1: str | None = None
     hq_city: str | None = None
     hq_region: str | None = None
     hq_postcode: str | None = None
     hq_country: str | None = None
+    hq_address_norm: str | None = None
 
+    entity_creation_date: str | None = None
     initial_registration_date: str | None = None
     last_update_date: str | None = None
     next_renewal_date: str | None = None
@@ -45,6 +50,11 @@ class GleifEntity(BaseModel):
     is_offshore: bool = False
     is_domestic: bool = False
 
+    # provenance
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
+
 
 class GleifRelationship(BaseModel):
     start_node_id: str
@@ -56,8 +66,28 @@ class GleifRelationship(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
 
+    # provenance
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
 
-class GleifException(BaseModel):
+
+class GleifRelationshipException(BaseModel):
     lei: str
     exception_category: str | None = None
     exception_reason: str | None = None
+
+    # provenance
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
+
+
+class IsinLei(BaseModel):
+    isin: str
+    lei: str
+
+    # provenance
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
