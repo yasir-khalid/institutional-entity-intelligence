@@ -4,6 +4,57 @@ Lean entity-resolution platform anchored on GLEIF LEI data. OpenSearch is used o
 for candidate retrieval, never as the system of record — canonical data lives in
 Parquet.
 
+## Quickstart
+
+**Setup** (once):
+
+```bash
+brew install libpostal   # macOS; ships its own trained model data
+CFLAGS="-I/opt/homebrew/include" LDFLAGS="-L/opt/homebrew/lib" uv sync
+cp .env.example .env     # fill in OPENSEARCH_URL
+```
+
+**Data pipeline** (once, or after changing raw GLEIF files — see "Phase 1/2" below
+for details; each step reads the previous step's output):
+
+```bash
+uv run python -m er.ingestion.gleif        # raw XML/CSV -> data/processed/*.parquet (~10-15 min)
+uv run python -m er.indexing.opensearch_index  # entities -> OpenSearch (~20 min)
+uv run python -m er.validation              # sanity-check the processed tables
+uv run python -m er.benchmark.generate      # data/benchmark/*.parquet (~1 sec, DuckDB)
+```
+
+**Day-to-day usage** — three CLIs, from simplest to richest:
+
+```bash
+# 1. Raw candidate search - "what does OpenSearch think this could be"
+uv run python -m er.search --name "Sampo Oyj" --country FI
+
+# 2. Full resolution - retrieve + score + decide, with evidence
+uv run python -m er.match --name "North Rock Capital" --country GB
+
+# 3. Relationship hierarchy - resolve a name (or pass --lei directly), then show
+#    who manages it / what it's a sub-fund of / what it manages
+uv run python -m er.hierarchy --name "Albacore Partners I Master Fund" --country IE
+uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16
+```
+
+**Testing**:
+
+```bash
+uv run pytest                                    # 75 unit tests, no live services needed
+uv run python -m er.evaluation.run_benchmark      # scores er.match against the full
+                                                   # 6,000-row benchmark (~5 min, needs
+                                                   # live OpenSearch) -> evaluation_report.json
+```
+
+`pytest` covers every pure function (normalization, features, scoring, decisions,
+benchmark generation, graph traversal) against small synthetic fixtures — no
+OpenSearch or real data required, runs in seconds. `run_benchmark` is the
+integration-level check: it exercises the real retrieval index end-to-end and is
+how every scoring change in this project has actually been validated (see the
+`name_ratio` bug fix below, found this exact way).
+
 ## What it does
 
 Given a messy, real-world name for a fund or manager, identify the correct legal
