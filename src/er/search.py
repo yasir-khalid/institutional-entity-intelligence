@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 
+from rich.console import Console
+from rich.table import Table
+
 from er.config import load_config
 from er.indexing.opensearch_index import get_client
 from er.retrieval.candidates import search_candidates
@@ -16,20 +19,32 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=None)
     args = parser.parse_args()
 
+    console = Console()
     cfg = load_config()
     client = get_client(cfg)
     results = search_candidates(client, cfg, args.name, args.country, args.size)
 
     if not results:
-        print("No candidates found.")
+        console.print("[dim]No candidates found.[/dim]")
         return
 
+    table = Table(title=f'Candidates for "{args.name}"', show_header=True, header_style="bold")
+    table.add_column("#", justify="right")
+    table.add_column("Legal name")
+    table.add_column("LEI")
+    table.add_column("Jurisdiction")
+    table.add_column("Country")
+    table.add_column("Score", justify="right")
     for r in results:
-        print(
-            f"{r['rank']:>2}. {r['legal_name']}\n"
-            f"    LEI: {r['lei']}  jurisdiction: {r['jurisdiction']}  "
-            f"country: {r['legal_country']}  score: {r['score']:.2f}"
+        table.add_row(
+            str(r["rank"]),
+            r["legal_name"],
+            r["lei"],
+            str(r.get("jurisdiction") or ""),
+            str(r.get("legal_country") or ""),
+            f"{r['score']:.2f}",
         )
+    console.print(table)
 
 
 if __name__ == "__main__":

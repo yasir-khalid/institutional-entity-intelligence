@@ -38,11 +38,33 @@ def test_name_exact_true_for_identical_normalized_name():
     assert f["name_ratio"] == 1.0
 
 
-def test_name_ratio_partial_for_similar_names():
+def test_name_ratio_perfect_when_query_is_token_subset_of_candidate():
+    # token_set_ratio (not plain Levenshtein ratio) is what makes an abbreviated
+    # query - missing only the trailing legal-form suffix - score as a perfect
+    # name match rather than being penalized for the raw length difference.
     q = build_query_record("Acme Global Opportunities Fund II")
     c = _candidate(legal_name_norm="acme global opportunities fund ii lp")
     f = compute_features(q, c)
-    assert 0.8 < f["name_ratio"] < 1.0
+    assert f["name_ratio"] == 1.0
+
+
+def test_name_ratio_partial_for_genuinely_different_names():
+    q = build_query_record("Acme Global Opportunities Fund")
+    c = _candidate(legal_name_norm="beta international holdings fund")
+    f = compute_features(q, c)
+    assert 0.0 < f["name_ratio"] < 0.8
+
+
+def test_name_ratio_favors_true_match_over_same_length_distractor():
+    # Regression test for the real North Rock Capital bug: plain fuzz.ratio scored
+    # an abbreviated true match WORSE than an unrelated same-length distractor,
+    # purely because of raw string length difference. token_set_ratio must not.
+    q = build_query_record("North Rock Capital")
+    true_match = _candidate(legal_name_norm="north rock capital management uk llp")
+    distractor = _candidate(legal_name_norm="north moor capital ltd")
+    true_ratio = compute_features(q, true_match)["name_ratio"]
+    distractor_ratio = compute_features(q, distractor)["name_ratio"]
+    assert true_ratio > distractor_ratio
 
 
 def test_fund_number_conflict_detected():

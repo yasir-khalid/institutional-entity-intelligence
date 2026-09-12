@@ -8,9 +8,21 @@ from __future__ import annotations
 
 import argparse
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
 from er.config import load_config
 from er.indexing.opensearch_index import get_client
 from er.matching.matcher import match
+from er.matching.models import Decision
+
+DECISION_STYLE = {
+    Decision.AUTO_MATCH: "bold green",
+    Decision.REVIEW: "bold yellow",
+    Decision.UNMATCHED: "bold red",
+}
 
 
 def main() -> None:
@@ -23,6 +35,7 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=5, help="how many candidates to print")
     args = parser.parse_args()
 
+    console = Console()
     cfg = load_config()
     client = get_client(cfg)
     result = match(
@@ -35,18 +48,50 @@ def main() -> None:
         args.registration_id,
     )
 
-    print(f"Decision: {result.decision.value}")
-    if result.lei:
-        print(f"LEI: {result.lei}  score: {result.score:.2f}  gap: {result.gap if result.gap is None else round(result.gap, 2)}")
-        print("Evidence:")
-        for k, v in sorted(result.evidence.items(), key=lambda kv: -abs(kv[1])):
-            print(f"  {k}: {v:+.2f}")
-    else:
-        print("No confident candidate.")
+    style = DECISION_STYLE[result.decision]
+    header = Text(result.decision.value, style=style)
 
-    print(f"\nTop {min(args.top, len(result.candidates))} candidates:")
-    for c in result.candidates[: args.top]:
-        print(f"  {c.rank:>2}. {c.legal_name}  LEI: {c.lei}  score: {c.score:.2f}")
+    if result.lei:
+        chosen = next((c for c in result.candidates if c.lei == result.lei), None)
+        body = Text()
+        body.append(f"{chosen.legal_name}\n", style="bold")
+        body.append(f"LEI: {result.lei}\n")
+        body.append(f"Score: {result.score:.2f}")
+        if result.gap is not None:
+            body.append(f"   Gap to runner-up: {result.gap:.2f}")
+        panel = Panel(body, title=header, subtitle=f'query: "{args.name}"', border_style=style.split()[-1])
+    else:
+        panel = Panel(
+            Text("No confident candidate.", style="dim"),
+            title=header,
+            subtitle=f'query: "{args.name}"',
+            border_style=style.split()[-1],
+        )
+    console.print(panel)
+
+    if result.evidence:
+        evidence_table = Table(title="Evidence", show_header=True, header_style="bold")
+        evidence_table.add_column("Feature")
+        evidence_table.add_column("Contribution", justify="right")
+        for k, v in sorted(result.evidence.items(), key=lambda kv: -abs(kv[1])):
+            style = "green" if v > 0 else "red"
+            evidence_table.add_row(k, Text(f"{v:+.2f}", style=style))
+        console.print(evidence_table)
+
+    n = min(args.top, len(result.candidates))
+    candidates_table = Table(title=f"Top {n} candidates", show_header=True, header_style="bold")
+    candidates_table.add_column("#", justify="right")
+    candidates_table.add_column("Legal name")
+    candidates_table.add_column("LEI")
+    candidates_table.add_column("Score", justify="right")
+    for c in result.candidates[:n]:
+        is_chosen = c.lei == result.lei
+        row_style = "bold green" if is_chosen else None
+        marker = "✓ " if is_chosen else ""
+        candidates_table.add_row(
+            str(c.rank), f"{marker}{c.legal_name}", c.lei, f"{c.score:.2f}", style=row_style
+        )
+    console.print(candidates_table)
 
 
 if __name__ == "__main__":

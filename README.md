@@ -229,27 +229,52 @@ uv run python -m er.match --name "Albacore Partners I Master Fund" --country IE
 uv run python -m er.evaluation.run_benchmark
 ```
 
-### First baseline (this snapshot)
+### A real bug the evaluation harness caught: abbreviated names scored *worse* than wrong ones
 
-| | easy (raw name) | medium (stripped/compact name) | hard (confusable pair, ambiguous name) |
+`python -m er.search --name "North rock capital" --country GB` correctly ranked
+**NORTH ROCK CAPITAL MANAGEMENT (UK) LLP** #1. But `er.match` on the exact same
+query ranked it **#7**, behind five wrong entities, and returned `UNMATCHED`.
+
+Root cause: `name_ratio` used `rapidfuzz.fuzz.ratio` — a Levenshtein-style ratio
+that's heavily penalized by raw string-length difference. An abbreviated query
+("north rock capital", 19 chars) against its own full legal name ("...management
+uk llp", 37 chars) scored **66.7**, *worse* than an unrelated same-length distractor
+("north moor capital ltd") at **75.0** — purely because the wrong candidate happened
+to be closer in length. Switched to `fuzz.token_set_ratio` (compares token sets,
+not raw character sequences), which scores the true match **100** vs. the best
+distractor **83.9** — confirmed this doesn't change anything for the
+master/feeder or fund-number conflict cases, which are caught by their own
+dedicated penalty features regardless of `name_ratio`. Regression test added:
+`tests/test_features.py::test_name_ratio_favors_true_match_over_same_length_distractor`.
+
+Re-ran the full benchmark before/after this one-line fix:
+
+| | easy | medium (stripped/compact) | hard (confusable pair) |
 |---|---|---|---|
-| Recall@20 | 99.9% | 54.6% | 77.5% |
-| AUTO_MATCH coverage | 96.8% | 26.5% | 10.2% |
-| AUTO_MATCH precision | 100% | 99.3% | 53.9% |
+| AUTO_MATCH coverage (before → after) | 96.8% → 96.8% | 26.5% → **41.5%** | 10.2% → **18.9%** |
+| AUTO_MATCH precision (before → after) | 100% → 100% | 99.3% → 99.6% | 53.9% → **63.5%** |
 
-Overall: Recall@20 71.1%, AUTO_MATCH precision 98.0%, **dangerous-failure rate on
-confusable pairs 2.7%** (confidently matched the *wrong* twin entity — the metric
-this design treats as mattering most). Full breakdown in
-`data/benchmark/evaluation_report.json`.
+Net positive — but not free: **dangerous-failure rate on confusable pairs went from
+2.7% to 4.2%**. A more forgiving name-similarity metric that correctly rewards
+abbreviated true matches is, unsurprisingly, also slightly more willing to
+confidently pick between two genuinely ambiguous twin entities. Recall@20 (71.1%
+overall) is unchanged, as expected — `name_ratio` only affects the *scorer*, not
+retrieval. Full breakdown in `data/benchmark/evaluation_report.json`.
 
-Reading this: the matcher is appropriately conservative on hard cases (low
-AUTO_MATCH coverage rather than guessing), which is the right failure mode, but two
-things stand out as real next-step targets — the "medium" tier's retrieval recall
-is weak (the compact/no-space query variant likely doesn't tokenize well against
-OpenSearch's standard analyzer), and the 2.7% dangerous-failure rate on genuinely
-ambiguous confusable pairs, while small, is non-zero and worth tracking as the
-matcher evolves.
+This is exactly the failure mode the project's design treats as most dangerous
+(wrong entity, high confidence), so it's the top thing to dig into next — likely
+by checking whether the confusable pairs it now gets wrong are the
+`other_same_core` kind (no fund-number/master-feeder signal exists at all to catch
+them, e.g. two same-named trusts in different jurisdictions) versus genuine
+scoring failures on cases the conflict features *should* have caught.
+
+### CLI output
+
+Both `er.search` and `er.match` now render with **rich** — colored decision panels
+(green/yellow/red for AUTO_MATCH/REVIEW/UNMATCHED), an evidence table, and a
+candidates table with the chosen entity marked.
 
 Out of scope for this phase: ML-based scoring, external sources
 (SEC/FCA/Companies House), relationship-graph resolution, retrieval tuning to
-address the medium-tier recall gap above.
+address the medium-tier recall gap, and investigating the confusable-pair
+dangerous-failure regression noted above.
