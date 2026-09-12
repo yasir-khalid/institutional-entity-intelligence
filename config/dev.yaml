@@ -1,0 +1,16 @@
+gleif:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  entities_zip: 20260911-gleif-concatenated-file-lei2.xml.6aa3c8c8d917c.zip
+  relationships_zip: 20260911-gleif-concatenated-file-rr.xml.6aa3c5ef411c5.zip
+  exceptions_zip: 20260911-gleif-concatenated-file-repex.xml.6aa3c6d719a6d.zip
+  batch_size: 50000
+
+opensearch:
+  index_name: gleif_entities_v1
+  number_of_shards: 2
+  number_of_replicas: 0
+  bulk_batch_size: 2000
+
+search:
+  default_size: 20
