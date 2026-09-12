@@ -159,10 +159,15 @@ def entity_tree(
     entity_id: str,
     depth: int = Query(2, ge=1, le=5),
     direction: str = Query("all"),
+    extra_parent_depth: int = Query(
+        1, ge=0, le=3, description="Extra hops upward beyond depth - ownership chains are usually short and high-value to see in full."
+    ),
 ) -> TreeNode:
     if direction not in ("parents", "children", "all"):
         raise HTTPException(400, "direction must be one of parents, children, all")
-    root = build_hierarchy_tree(_cfg(), entity_id, depth=depth, direction=direction)
+    root = build_hierarchy_tree(
+        _cfg(), entity_id, depth=depth, direction=direction, extra_parent_depth=extra_parent_depth
+    )
     return _convert_tree(root, None)
 
 

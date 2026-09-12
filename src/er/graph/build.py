@@ -98,10 +98,20 @@ def build_hierarchy_tree(
     depth: int = 1,
     direction: str = "all",
     max_nodes: int = DEFAULT_MAX_NODES,
+    extra_parent_depth: int = 0,
 ) -> HierarchyNode:
     """Multi-hop version of build_hierarchy(): depth=1 (the default) is exactly
     today's single-hop behavior - each edge is a leaf carrying only its own
     name/type, not expanded further. depth=2 expands one more level past that, etc.
+
+    `extra_parent_depth` (default 0, fully backward compatible) lets the upward
+    (parent/manager) side recurse that many hops further than `depth` while
+    downward stays capped at `depth` - ownership chains up to an ultimate
+    parent are usually short and high-value to see in full, while a manager's
+    downward fan-out (funds/subsidiaries) can be large and is better kept
+    shallow by default. Set independently per call rather than baked into
+    `depth` itself so every existing caller (er.cli.hierarchy) is unaffected
+    unless it opts in.
 
     Cycle protection: a LEI is only ever expanded once across the whole traversal,
     even if reachable via multiple paths (real GLEIF data can have cycles, e.g. two
@@ -114,17 +124,15 @@ def build_hierarchy_tree(
     visited: set[str] = set()
     budget = {"remaining": max_nodes}
 
-    def expand(node_lei: str, remaining_depth: int) -> HierarchyNode:
+    def expand(node_lei: str, remaining_up: int, remaining_down: int) -> HierarchyNode:
         visited.add(node_lei)
         budget["remaining"] -= 1
         flat = build_hierarchy(cfg, node_lei)
         node = HierarchyNode(lei=node_lei, name=flat.name, exceptions=flat.exceptions)
 
-        can_recurse = remaining_depth > 1 and budget["remaining"] > 0
-
-        def expand_or_leaf(edge: RelationshipEdge) -> HierarchyNode:
-            if can_recurse and edge.lei not in visited:
-                child = expand(edge.lei, remaining_depth=remaining_depth - 1)
+        def expand_or_leaf(edge: RelationshipEdge, remaining_up: int, remaining_down: int, can_recurse: bool) -> HierarchyNode:
+            if can_recurse and budget["remaining"] > 0 and edge.lei not in visited:
+                child = expand(edge.lei, remaining_up=remaining_up, remaining_down=remaining_down)
             else:
                 child = HierarchyNode(lei=edge.lei, name=edge.name, expanded=False)
             child.relationship_type = edge.relationship_type
@@ -133,11 +141,13 @@ def build_hierarchy_tree(
             return child
 
         if direction in ("parents", "all"):
+            can_recurse_up = remaining_up > 1
             for edge in flat.upward:
-                node.upward.append(expand_or_leaf(edge))
+                node.upward.append(expand_or_leaf(edge, remaining_up - 1, remaining_down, can_recurse_up))
         if direction in ("children", "all"):
+            can_recurse_down = remaining_down > 1
             for edge in flat.downward:
-                node.downward.append(expand_or_leaf(edge))
+                node.downward.append(expand_or_leaf(edge, remaining_up, remaining_down - 1, can_recurse_down))
         return node
 
-    return expand(lei, remaining_depth=depth)
+    return expand(lei, remaining_up=depth + extra_parent_depth, remaining_down=depth)

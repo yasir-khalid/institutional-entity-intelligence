@@ -250,6 +250,60 @@ def test_depth_2_expands_one_more_level(cfg):
     assert c.expanded is False  # depth exhausted at this level
 
 
+def test_extra_parent_depth_expands_parents_further_than_children(cfg):
+    # A's parent chain: A -> B -> C -> D (3 hops up). A's child: E (1 hop down).
+    _write_entities(
+        cfg,
+        [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C"), _entity("LEI_D", "D"), _entity("LEI_E", "E")],
+    )
+    _write_relationships(
+        cfg,
+        [
+            _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
+            _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
+            _rel("LEI_C", "LEI_D", "IS_DIRECTLY_CONSOLIDATED_BY"),
+            _rel("LEI_E", "LEI_A", "IS_DIRECTLY_CONSOLIDATED_BY"),
+        ],
+    )
+    _write_exceptions(cfg, [])
+
+    root = build_hierarchy_tree(cfg, "LEI_A", depth=2, extra_parent_depth=1)
+
+    # Parents recurse to depth 2+1=3: A -> B -> C -> D, with D as an
+    # unexpanded leaf (budget exhausted one hop further than it would be
+    # without extra_parent_depth).
+    b = root.upward[0]
+    c = b.upward[0]
+    assert c.lei == "LEI_C"
+    assert c.expanded is True
+    d = c.upward[0]
+    assert d.lei == "LEI_D"
+    assert d.expanded is False
+
+    # Children still stop at plain depth=2, unaffected by extra_parent_depth.
+    e = root.downward[0]
+    assert e.lei == "LEI_E"
+    assert e.expanded is True
+    assert e.downward == []  # A's own downward not re-expanded (cycle back to root)
+
+
+def test_extra_parent_depth_zero_is_unchanged_from_default(cfg):
+    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
+    _write_relationships(
+        cfg,
+        [
+            _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
+            _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
+        ],
+    )
+    _write_exceptions(cfg, [])
+
+    with_default = build_hierarchy_tree(cfg, "LEI_A", depth=2)
+    with_explicit_zero = build_hierarchy_tree(cfg, "LEI_A", depth=2, extra_parent_depth=0)
+
+    assert with_default.model_dump() == with_explicit_zero.model_dump()
+
+
 def test_cycle_does_not_infinite_loop(cfg):
     # A -> B -> A: a real (if unusual) possibility in GLEIF's relationship data.
     _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B")])
