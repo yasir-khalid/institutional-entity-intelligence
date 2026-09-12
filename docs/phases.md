@@ -578,3 +578,62 @@ given the size of this addition, using a headless Chrome instance driven
 directly rather than guessing from screenshots), and no authentication on the
 API (loopback-only CORS is the only safeguard - do not deploy this API to a
 non-localhost address without adding auth first).
+
+## Phase 14: org-chart tree layout, skeleton loading, and a real data-scale bug
+
+Researched how real corporate-structure tools present ownership hierarchies
+(Moody's Orbis "corporate trees", React Flow's expand-collapse org-chart
+pattern) before rebuilding the tree a second time: a hierarchical top-down
+layout with rounded-corner card nodes (`@xyflow/react` + `dagre` for layout),
+each with its own independent expand/collapse toggle, replacing the plain
+collapsible list from Phase 13. `EntityNode.tsx` renders the card (green top
+border for parents, purple for subsidiaries/funds, a blue **Query** badge on
+the root, a blue ring on the selected entity); `TreeGraph.tsx` flattens the
+API's nested tree, runs dagre, and tracks per-node collapse state.
+
+Two real bugs found while testing against a real large entity (Fred Alger
+Management, a sizeable asset manager):
+
+1. **Collapse hid unrelated siblings.** The flatten step kept every
+   relationship edge, including cross-links where a sibling's own upward
+   listing pointed at another sibling already reached directly from root.
+   Collapsing one fund then transitively hid ~35 of ~47 unrelated top-level
+   entities, since the collapse logic couldn't distinguish "this node's real
+   children" from "an unrelated node reachable via a back-reference." Fixed
+   by building a proper spanning tree instead - one parent edge per entity,
+   first-discovery wins, subtree explored exactly once. Verified live:
+   expanding one fund now reveals only its own umbrella + sub-funds while all
+   11 other top-level siblings stay untouched.
+
+2. **A hub-heavy entity's tree exploded to 1,111 nodes.** `/api/entity/{id}/tree`
+   inherited `build_hierarchy_tree`'s CLI-tuned `max_nodes=200` default, but
+   that budget counts *expansions*, not total tree size - each expansion can
+   list many un-expanded leaf children, and the relationship between the two
+   is highly non-linear for hub-heavy entities: measured live on the same
+   real entity, `max_nodes=35` produced 48 total nodes, `max_nodes=40`
+   produced 434, and `max_nodes=55` produced 1,111 - one extra hub expansion
+   unlocking a cascade. This wasn't fixable on the frontend alone (a
+   force-directed canvas, a plain list, or an org chart all still have to
+   receive, parse, and lay out however many nodes the API sends before any of
+   them can visually hide something). Fixed with a dedicated, much lower
+   `max_nodes` default (30) on the web endpoint specifically, chosen to sit
+   safely below where the cascade started - `build_hierarchy_tree`'s own CLI
+   default is untouched.
+
+Also added `Skeletons.tsx` (a shared `Bar` primitive plus `ResultsSkeleton`/
+`TreeSkeleton`) and wired a loading skeleton into every async boundary: the
+results list while searching, the tree area while it loads, and the details
+panel while an entity loads.
+
+### Verify
+
+```bash
+uv run pytest                                 # unaffected, still 147 passing
+cd web && npx tsc --noEmit && npm run build   # clean
+curl "http://localhost:8000/api/entity/549300TITGLG7BXCGB39/tree?depth=2" | \
+  python3 -c "import json,sys; print(len(json.load(sys.stdin)))"  # bounded, not 1,111
+```
+
+Confirmed live with a real headless Chrome driven through the actual search
+-> expand -> collapse flow (not just TypeScript/build checks), including the
+specific expand/collapse scenario that exposed the spanning-tree bug.

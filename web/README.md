@@ -27,18 +27,20 @@ a separate pipeline.
    **Security ID (CUSIP)**.
 2. A single unambiguous result (or a confident `AUTO_MATCH`) jumps straight to
    the relationship tree; otherwise pick one from the results list.
-3. The tree renders as a collapsible, indented list (like a JSON/file-tree
-   viewer) - parents shown with a green dot, funds/subsidiaries with a purple
-   one. Parents expand one hop deeper than children by default (ownership
-   chains up to an ultimate parent are usually short and worth seeing in
-   full; a manager's fund/subsidiary fan-out can be large, so it starts
-   collapsed past the first two levels). The originally-searched entity
-   always carries a blue **QUERY** badge; whichever entity is currently
-   selected (loaded in the details panel) is shaded blue - both can be the
-   same row, or different once you click into a relative.
-4. Click any row to load its full profile - identifiers, GLEIF status, and
+3. The tree renders as a top-down org chart (rounded-corner cards, auto-laid
+   out with `dagre`) - parent/manager cards have a green top border, fund/
+   subsidiary cards a purple one. Parents expand one hop deeper than children
+   by default (ownership chains up to an ultimate parent are usually short
+   and worth seeing in full). Only the root's direct neighbors are expanded
+   on first load; every card with children has a **+/−** toggle to expand or
+   collapse just that branch, independent of its siblings. The originally-
+   searched entity always carries a blue **QUERY** badge; whichever entity is
+   currently selected (loaded in the details panel) gets a blue ring - both
+   can be the same card, or different once you click into a relative.
+4. Click any card to load its full profile - identifiers, GLEIF status, and
    (when resolved as a filer) its latest SEC 13F reported holdings - into the
-   right-hand panel.
+   right-hand panel. Every loading state (search results, the tree, the
+   details panel) shows a skeleton placeholder rather than a blank screen.
 
 ## Structure
 
@@ -48,15 +50,21 @@ src/
 ├── components/
 │   ├── SearchBar.tsx          # query input + Name/LEI/CUSIP toggle
 │   ├── ResultsList.tsx        # ambiguous-search result picker
-│   ├── TreeExplorer.tsx       # collapsible indented tree list - renders TreeNode JSON,
-│   │                            highlights the query root and the selected row
+│   ├── TreeGraph.tsx          # flattens TreeNode into a spanning tree, lays it out
+│   │                            with dagre, manages per-node collapse state
+│   ├── EntityNode.tsx         # the rounded-corner card React Flow renders per entity
+│   ├── Skeletons.tsx          # shared loading placeholders (Bar/ResultsSkeleton/TreeSkeleton)
 │   └── DetailsPanel.tsx       # renders EntityDetail JSON
 └── lib/api.ts                 # typed fetch client - mirrors src/er/api/schemas.py exactly
 ```
 
-An earlier version rendered the tree on a force-directed/DAG canvas
-(`react-d3-tree`, then `react-force-graph-2d`) - dropped in favor of a plain
-collapsible list once real entities with 40+ funds made a canvas layout
-unwieldy and hard to keep readable. The plain-list approach scales to a large
-fan-out far more predictably (just scroll/collapse) and needed no additional
-dependency.
+Two earlier versions were tried and dropped: `react-d3-tree` (SVG tree -
+cycle-protected duplicate nodes produced overlapping, badly-fonted labels) and
+a plain collapsible indented list (correct and simple, but didn't match how
+real corporate-structure tools like Moody's Orbis present ownership - a
+top-down org chart). The current version (`@xyflow/react` + `dagre`) is
+closer to that standard shape while keeping the same per-branch collapse
+behavior. It also exposed a real backend bug: rendering every node as its own
+DOM element up front meant a hub-heavy real entity's true fan-out (1,111
+nodes at the old default) had to be capped much more aggressively than the
+CLI ever needed - see `docs/phases.md` Phase 13 for the numbers.
