@@ -69,6 +69,14 @@ roadmap (`SCORE`, `DECIDE`, external sources, canonical entity/crosswalk tables)
 
 ## Phase 1 (current): GLEIF ingestion + candidate search
 
+**Status: verified end-to-end.** 3,428,431 entities / 668,828 relationships /
+6,185,301 exceptions parsed (counts match the GLEIF file headers exactly);
+3,428,166 entities indexed into OpenSearch (1.1GB, well under the 20GB budget);
+`er.search` returns correctly ranked candidates, including on the master/feeder
+and fund-number-conflict cases the normalization was built to handle (e.g.
+"Albacore Partners I Master Fund" ranks the exact entity #1, with "...II Master
+Fund" and "...I Feeder ICAV" correctly ranked lower as distinct entities).
+
 ```
 GLEIF XML (entities/relationships/exceptions)
   -> streaming parse (lxml, bounded memory)
