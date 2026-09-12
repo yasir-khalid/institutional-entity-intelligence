@@ -658,3 +658,59 @@ uv run python -m er.match --name "Sampo Oyj" --country FI   # live sanity check
 Out of scope still: SEC Form ADV ingestion itself (`src/er/datasources/sec_adv/`)
 needs a decision on how to obtain the actual bulk data files before it can be
 planned concretely, and the canonical multi-source entity model.
+
+## Phase 9: clear raw→cleaned models, extracted field helpers, configurable indexing
+
+Three readability/architecture improvements to the GLEIF ingestion pipeline,
+prompted directly by a request to make the code as simple and human-readable as
+possible - deliberately **not** a decorator-based field-mapping DSL (considered
+and rejected: it would hide the actual field logic behind indirection and make
+debugging a bad value harder, exactly the opposite of the goal).
+
+**The raw→cleaned model boundary is now real, not decorative.** `GleifEntity` /
+`GleifRelationship` / `GleifRelationshipException` / `IsinLei` (moved from a
+top-level `er/models.py`, which nothing actually imported, into
+`er/datasources/gleif/models.py` - the "each source owns its schema" principle
+from Phase 8 applies to these too) used to be dead code: `ingest.py` built a plain
+dict and wrote it straight to Parquet, never validating through them. Every parser
+now does `GleifEntity(**fields).model_dump()` (etc.) before writing - a genuinely
+enforced contract. A malformed record now fails loudly with a clear pydantic
+error instead of silently reaching the canonical Parquet store.
+
+**Field extraction is now named and grouped, not one long inline dict.**
+`parse_entities()` used to build a ~55-line dict literal inline, full of repeated
+`_text(x.find(...))` conditionals - the least readable part of the codebase.
+Split into `er/datasources/gleif/fields.py`, one function per logical group
+(`extract_name_fields`, `extract_legal_form`, `extract_registration`,
+`extract_addresses`, `extract_status_fields`, `extract_registration_dates`), so
+`_build_entity_row()` now reads as a straight composition of them. Also pulled
+the three truly source-agnostic helpers (`open_zip_member`, `clear_element`,
+`element_text`) into `er/datasources/common/xml_utils.py` - reusable by any
+future XML-based source, unlike the GLEIF-namespace-aware field extractors, which
+correctly stay in `gleif/`.
+
+**OpenSearch bulk-load refresh interval is now configurable**
+(`opensearch.refresh_interval_during_bulk` / `refresh_interval_after_bulk` in
+`config/dev.yaml`), not hardcoded `"-1"`/`"1s"` inside `opensearch_index.py`.
+
+### Verify
+
+```bash
+make test                                                    # 115 unit tests, unaffected
+make ingest-gleif                                            # full re-run
+make validate
+```
+
+Ran the full production pipeline end to end, not just a sample - every count is
+identical to the pre-refactor baseline: 3,428,166 entities post-dedup (265
+duplicate-LEI rows removed, same as always), 668,828 relationships, 6,185,301
+exceptions, 9,261,589 ISIN mappings, `make validate` passing clean. Entity
+throughput held at ~5,100-5,400 records/sec (was ~5,800-6,000 pre-refactor,
+consistent with the small, expected pydantic-validation overhead measured on a
+20,000-row sample beforehand: 6,009/sec). The one place the overhead is more
+visible is `isin_lei` - a much simpler per-row loop, so the same fixed
+per-record validation cost is proportionally larger: ~380k rows/sec versus
+~700k+ pre-refactor. Still finishes the full 9.26M rows in about 24 seconds
+either way, so not something worth trading away the validation for here - but
+worth knowing before adding a third XML source and assuming ingest.py's ratio
+holds everywhere.

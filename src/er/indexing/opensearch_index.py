@@ -76,7 +76,7 @@ def create_index(client: OpenSearch, cfg: AppConfig, recreate: bool = False) -> 
         "settings": {
             "number_of_shards": cfg.opensearch.number_of_shards,
             "number_of_replicas": cfg.opensearch.number_of_replicas,
-            "refresh_interval": "1s",
+            "refresh_interval": cfg.opensearch.refresh_interval_after_bulk,
         },
         "mappings": {"dynamic": "strict", **MAPPING},
     }
@@ -93,7 +93,9 @@ def bulk_load(client: OpenSearch, cfg: AppConfig) -> int:
     parquet_path = cfg.gleif.processed_dir / "gleif_entities.parquet"
     pf = pq.ParquetFile(parquet_path)
 
-    client.indices.put_settings(index=name, body={"index": {"refresh_interval": "-1"}})
+    client.indices.put_settings(
+        index=name, body={"index": {"refresh_interval": cfg.opensearch.refresh_interval_during_bulk}}
+    )
 
     started = time.monotonic()
     total = 0
@@ -114,7 +116,9 @@ def bulk_load(client: OpenSearch, cfg: AppConfig) -> int:
                 elapsed = time.monotonic() - started
                 logger.info("indexed %d docs (%.0fs, %.0f/s)", total, elapsed, total / elapsed)
     finally:
-        client.indices.put_settings(index=name, body={"index": {"refresh_interval": "1s"}})
+        client.indices.put_settings(
+            index=name, body={"index": {"refresh_interval": cfg.opensearch.refresh_interval_after_bulk}}
+        )
         client.indices.refresh(index=name)
 
     logger.info("bulk load complete: %d docs indexed into %s", total, name)

@@ -36,6 +36,12 @@ class OpenSearchConfig(BaseModel):
     number_of_shards: int = 2
     number_of_replicas: int = 0
     bulk_batch_size: int = 2000
+    # Disabling refresh during a large bulk load and restoring it after is a
+    # standard OpenSearch/Elasticsearch optimization - exposed here rather than
+    # hardcoded so it can be tuned (or disabled by setting both to the same value)
+    # without touching code.
+    refresh_interval_during_bulk: str = "-1"
+    refresh_interval_after_bulk: str = "1s"
 
 
 class SearchConfig(BaseModel):

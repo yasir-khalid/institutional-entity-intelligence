@@ -12,6 +12,8 @@ opensearch:
   number_of_shards: 2
   number_of_replicas: 0
   bulk_batch_size: 2000
+  refresh_interval_during_bulk: "-1"
+  refresh_interval_after_bulk: "1s"
 
 search:
   default_size: 20
