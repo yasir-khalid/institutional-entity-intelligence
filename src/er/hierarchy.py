@@ -1,4 +1,4 @@
-"""CLI: python -m er.hierarchy --lei <LEI> [--direction parents|children|all]
+"""CLI: python -m er.hierarchy --lei <LEI> [--direction parents|children|all] [--depth N]
    or:  python -m er.hierarchy --name "..." --country XX   (resolves via er.match first)
 
 Given an LEI (or a messy name+country that gets resolved to one first), shows its
@@ -6,6 +6,10 @@ GLEIF relationship neighborhood: parents/managers/master-fund upward, subsidiari
 managed-funds/feeder-funds downward, and any "missing parent" exceptions not
 already explained by an active relationship - a missing row is never treated as a
 confirmed absence of a parent.
+
+--depth controls how many hops to walk (default 1, today's original single-hop
+behavior). depth=2 also shows each neighbor's own neighbors, etc. Cycle-safe and
+node-budget-capped - see er.graph.build.build_hierarchy_tree.
 """
 
 from __future__ import annotations
@@ -16,43 +20,55 @@ from rich.console import Console
 from rich.tree import Tree
 
 from er.config import load_config
-from er.graph.build import build_hierarchy
-from er.graph.models import HierarchyResult
+from er.graph.build import build_hierarchy_tree
+from er.graph.models import HierarchyNode
 
 DIRECTIONS = ("parents", "children", "all")
 
 
-def render(console: Console, result: HierarchyResult, direction: str = "all") -> None:
-    root_label = f"[bold]{result.name or '(unknown name)'}[/bold]  LEI: {result.lei}"
-    tree = Tree(root_label)
+def _add_edge_branch(parent_branch: Tree, node: HierarchyNode, direction: str) -> None:
+    status = f"[dim]{node.status or 'n/a'}[/dim]"
+    rel_type = f"[dim]({node.relationship_type})[/dim]"
+    suffix = "" if node.expanded else " [dim]…(depth limit reached)[/dim]"
+    label = f"{node.label}: {node.name or '(unknown name)'}  LEI: {node.lei}  {status} {rel_type}{suffix}"
+    branch = parent_branch.add(label)
+    if node.expanded:
+        _add_children(branch, node, direction)
 
-    if direction in ("parents", "all") and result.upward:
-        branch = tree.add("[cyan]Upward relationships[/cyan] (parents / managers / master fund)")
-        for e in result.upward:
-            status = f"[dim]{e.status or 'n/a'}[/dim]"
-            rel_type = f"[dim]({e.relationship_type})[/dim]"
-            branch.add(f"{e.label}: {e.name or '(unknown name)'}  LEI: {e.lei}  {status} {rel_type}")
 
-    if direction in ("children", "all") and result.downward:
-        branch = tree.add("[cyan]Downward relationships[/cyan] (subsidiaries / funds / feeders)")
-        by_label: dict[str, list] = {}
-        for e in result.downward:
-            by_label.setdefault(e.label, []).append(e)
-        for label, edges in by_label.items():
-            rel_type = f"[dim]({edges[0].relationship_type})[/dim]"
-            group = branch.add(f"{label} {rel_type} ({len(edges)})")
-            for e in edges:
-                status = f"[dim]{e.status or 'n/a'}[/dim]"
-                group.add(f"{e.name or '(unknown name)'}  LEI: {e.lei}  {status}")
+def _add_children(branch: Tree, node: HierarchyNode, direction: str) -> None:
+    if direction in ("parents", "all") and node.upward:
+        up_branch = branch.add("[cyan]Upward[/cyan]")
+        for child in node.upward:
+            _add_edge_branch(up_branch, child, direction)
 
-    if direction in ("parents", "all") and result.exceptions:
-        branch = tree.add("[yellow]Known gaps[/yellow] (no relationship row, but a reason is on file)")
-        for exc in result.exceptions:
-            branch.add(f"{exc.label}: {exc.reason_text}")
+    if direction in ("children", "all") and node.downward:
+        down_branch = branch.add("[cyan]Downward[/cyan]")
+        by_label: dict[str, list[HierarchyNode]] = {}
+        for child in node.downward:
+            by_label.setdefault(child.label or child.relationship_type or "?", []).append(child)
+        for label, children in by_label.items():
+            rel_type = f"[dim]({children[0].relationship_type})[/dim]"
+            group = down_branch.add(f"{label} {rel_type} ({len(children)})")
+            for child in children:
+                status = f"[dim]{child.status or 'n/a'}[/dim]"
+                suffix = "" if child.expanded else " [dim]…(depth limit reached)[/dim]"
+                leaf = group.add(f"{child.name or '(unknown name)'}  LEI: {child.lei}  {status}{suffix}")
+                if child.expanded:
+                    _add_children(leaf, child, direction)
 
-    shown_upward = direction in ("parents", "all") and (result.upward or result.exceptions)
-    shown_downward = direction in ("children", "all") and result.downward
-    if not shown_upward and not shown_downward:
+    if direction in ("parents", "all") and node.exceptions:
+        exc_branch = branch.add("[yellow]Known gaps[/yellow] (no relationship row, but a reason is on file)")
+        for exc in node.exceptions:
+            exc_branch.add(f"{exc.label}: {exc.reason_text}")
+
+
+def render(console: Console, root: HierarchyNode, direction: str = "all") -> None:
+    tree = Tree(f"[bold]{root.name or '(unknown name)'}[/bold]  LEI: {root.lei}")
+    _add_children(tree, root, direction)
+
+    has_content = bool(root.upward or root.downward or root.exceptions)
+    if not has_content:
         tree.add(f"[dim]No {direction} relationships or exceptions on file for this entity.[/dim]")
 
     console.print(tree)
@@ -74,6 +90,13 @@ def main() -> None:
         default="all",
         choices=DIRECTIONS,
         help="parents: upward relationships only. children: downward only. all (default): both.",
+    )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help="how many hops to walk (default 1 = immediate relationships only, today's original "
+        "behavior). depth=2 also expands each neighbor's own relationships, etc.",
     )
     args = parser.parse_args()
 
@@ -101,8 +124,8 @@ def main() -> None:
         console.print(f'Resolved "{args.name}" -> {result.lei}  (decision: {result.decision.value})\n')
         lei = result.lei
 
-    hierarchy = build_hierarchy(cfg, lei)
-    render(console, hierarchy, args.direction)
+    root = build_hierarchy_tree(cfg, lei, depth=args.depth, direction=args.direction)
+    render(console, root, args.direction)
 
 
 if __name__ == "__main__":

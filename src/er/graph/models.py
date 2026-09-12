@@ -51,3 +51,23 @@ class HierarchyResult(BaseModel):
     upward: list[RelationshipEdge] = []
     downward: list[RelationshipEdge] = []
     exceptions: list[RelationshipException] = []
+
+
+class HierarchyNode(BaseModel):
+    """A node in a multi-hop hierarchy traversal. relationship_type/label/status
+    describe the edge connecting this node to its parent in the traversal (None
+    for the root, which has no incoming edge). `expanded=False` means this node's
+    own relationships were not fetched - it's a leaf either because `depth` was
+    exhausted or because it was already visited elsewhere (cycle protection) or
+    the traversal's node budget ran out.
+    """
+
+    lei: str
+    name: str | None
+    relationship_type: str | None = None
+    label: str | None = None
+    status: str | None = None
+    expanded: bool = True
+    exceptions: list[RelationshipException] = []
+    upward: list["HierarchyNode"] = []
+    downward: list["HierarchyNode"] = []

@@ -3,7 +3,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from er.config import AppConfig, BenchmarkConfig, GleifConfig, OpenSearchConfig, SearchConfig
-from er.graph.build import build_hierarchy
+from er.graph.build import build_hierarchy, build_hierarchy_tree
 
 
 @pytest.fixture
@@ -176,3 +176,123 @@ def test_unknown_entity_with_no_data_returns_empty_result(cfg):
     assert result.upward == []
     assert result.downward == []
     assert result.exceptions == []
+
+
+# --- build_hierarchy_tree (multi-hop) -------------------------------------------
+
+
+def test_depth_1_matches_single_hop_behavior_leaves_unexpanded(cfg):
+    # depth=1 (the default) must be identical in spirit to the original single-hop
+    # build_hierarchy(): immediate neighbors are shown, but not expanded further.
+    _write_entities(
+        cfg,
+        [
+            _entity("LEI_A", "A"),
+            _entity("LEI_B", "B"),
+            _entity("LEI_C", "C"),
+        ],
+    )
+    _write_relationships(
+        cfg,
+        [
+            _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
+            _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
+        ],
+    )
+    _write_exceptions(cfg, [])
+
+    root = build_hierarchy_tree(cfg, "LEI_A", depth=1)
+
+    assert root.lei == "LEI_A"
+    assert len(root.upward) == 1
+    b = root.upward[0]
+    assert b.lei == "LEI_B"
+    assert b.expanded is False
+    assert b.upward == []  # not expanded - would otherwise show LEI_C
+
+
+def test_depth_2_expands_one_more_level(cfg):
+    _write_entities(
+        cfg,
+        [
+            _entity("LEI_A", "A"),
+            _entity("LEI_B", "B"),
+            _entity("LEI_C", "C"),
+        ],
+    )
+    _write_relationships(
+        cfg,
+        [
+            _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
+            _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
+        ],
+    )
+    _write_exceptions(cfg, [])
+
+    root = build_hierarchy_tree(cfg, "LEI_A", depth=2)
+
+    b = root.upward[0]
+    assert b.expanded is True
+    assert len(b.upward) == 1
+    c = b.upward[0]
+    assert c.lei == "LEI_C"
+    assert c.expanded is False  # depth exhausted at this level
+
+
+def test_cycle_does_not_infinite_loop(cfg):
+    # A -> B -> A: a real (if unusual) possibility in GLEIF's relationship data.
+    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B")])
+    _write_relationships(
+        cfg,
+        [
+            _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
+            _rel("LEI_B", "LEI_A", "IS_DIRECTLY_CONSOLIDATED_BY"),
+        ],
+    )
+    _write_exceptions(cfg, [])
+
+    root = build_hierarchy_tree(cfg, "LEI_A", depth=5)  # would loop forever without protection
+
+    b = root.upward[0]
+    assert b.lei == "LEI_B"
+    assert b.expanded is True
+    a_again = b.upward[0]
+    assert a_again.lei == "LEI_A"
+    assert a_again.expanded is False  # already visited - not re-expanded
+
+
+def test_max_nodes_budget_stops_expansion(cfg):
+    # A chain of 5 entities; a budget of 2 expansions should only expand the root
+    # and one more level before truncating.
+    entities = [_entity(f"LEI_{i}", f"Entity {i}") for i in range(5)]
+    rels = [_rel(f"LEI_{i}", f"LEI_{i+1}", "IS_DIRECTLY_CONSOLIDATED_BY") for i in range(4)]
+    _write_entities(cfg, entities)
+    _write_relationships(cfg, rels)
+    _write_exceptions(cfg, [])
+
+    root = build_hierarchy_tree(cfg, "LEI_0", depth=10, max_nodes=2)
+
+    n1 = root.upward[0]
+    assert n1.lei == "LEI_1"
+    assert n1.expanded is True  # 2nd expansion (root was the 1st)
+    n2 = n1.upward[0]
+    assert n2.lei == "LEI_2"
+    assert n2.expanded is False  # budget exhausted
+
+
+def test_direction_children_only_expands_downward(cfg):
+    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
+    _write_relationships(
+        cfg,
+        [
+            _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),  # A's parent is B (upward from A)
+            _rel("LEI_C", "LEI_A", "IS_FUND-MANAGED_BY"),  # C's manager is A (downward from A)
+        ],
+    )
+    _write_exceptions(cfg, [])
+
+    root = build_hierarchy_tree(cfg, "LEI_A", depth=2, direction="children")
+
+    assert root.upward == []
+    assert len(root.downward) == 1
+    assert root.downward[0].lei == "LEI_C"

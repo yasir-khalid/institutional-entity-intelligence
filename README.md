@@ -44,8 +44,10 @@ uv run python -m er.match --name "North Rock Capital" --country GB
 # 3. Relationship hierarchy - resolve a name (or pass --lei directly), then show
 #    who manages it / what it's a sub-fund of / what it manages.
 #    --direction parents|children|all (default all) filters which side to show.
+#    --depth N (default 1) walks that many hops - depth=2 also expands each
+#    neighbor's own relationships (e.g. shows the "grandparent" too).
 uv run python -m er.hierarchy --name "Albacore Partners I Master Fund" --country IE
-uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16 --direction parents
+uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16 --direction parents --depth 2
 ```
 
 **Testing** — two levels, run both after any change to retrieval/scoring/decision logic:
@@ -395,9 +397,9 @@ Mitsubishi UFJ Financial Group. This is the "messy observation → canonical ent
 institutional graph" flow the project has been building toward, now working
 end-to-end.
 
-Out of scope still: SEC/FCA/Companies House enrichment, multi-hop traversal
-(showing a fund's manager's *own* other managed entities beyond one hop), and
-resolving natural-person parents (GLEIF deliberately excludes these from LEI data).
+Out of scope still: SEC/FCA/Companies House enrichment (multi-hop traversal is now
+built - see Phase 6 below) and resolving natural-person parents (GLEIF
+deliberately excludes these from LEI data).
 
 ## Phase 5: country semantics, retrieval/match score separation, better abstention
 
@@ -489,3 +491,49 @@ From the broader roadmap this phase's findings pointed toward:
   correct entity missing from candidates / country conflict / fund-manager
   confusion), beyond the current aggregate precision/recall numbers.
 - External sources (SEC/FCA/Companies House) - still last, per the original design.
+
+## Phase 6: multi-hop hierarchy traversal
+
+`er.hierarchy` gained `--depth N` (default `1`, exactly today's original
+single-hop behavior - unchanged for anyone not passing the flag). `depth=2` also
+expands each immediate neighbor's *own* relationships one more level; `depth=3`
+one further, etc.
+
+```
+src/er/graph/models.py   # + HierarchyNode: a recursive node (lei, name, the
+                            edge type/label/status connecting it to its parent,
+                            upward/downward lists of more HierarchyNodes, and
+                            `expanded: bool` - False means this branch stopped
+                            here, either because depth ran out or the node was
+                            already visited elsewhere in this traversal)
+src/er/graph/build.py    # + build_hierarchy_tree(): reuses the existing
+                            single-hop build_hierarchy() at each node it expands
+src/er/hierarchy.py      # recursive Tree renderer replaces the old flat one
+```
+
+Two safety properties, both regression-tested with synthetic fixtures
+(`tests/test_graph.py`):
+- **Cycle protection** - a LEI is only ever expanded once per traversal, even if
+  reachable via multiple paths (GLEIF data can have cycles - e.g. two entities
+  that are each other's parent under different accounting relationship types). A
+  revisited LEI is shown as a leaf (`expanded=False`), not re-expanded.
+- **Node budget** (`max_nodes`, default 200) - hub entities can have large fan-out
+  (Mitsubishi UFJ Financial Group has 96 direct subsidiaries at just one hop from
+  AlbaCore Capital Limited); once the budget is spent, remaining nodes render as
+  unexpanded leaves rather than the traversal running away.
+
+### Run
+
+```bash
+uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16 --direction parents --depth 1
+# -> shows Mitsubishi UFJ Financial Group as ultimate parent, unexpanded
+
+uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16 --direction parents --depth 2
+# -> same, but now also shows Mitsubishi UFJ's OWN upward relationships/exceptions
+#    (in this real case: no known parent at either direct or ultimate level)
+```
+
+Before this, getting the "grandparent" required a second, separate CLI call with
+the parent's own LEI - depth now does that automatically, with real production
+data confirming both the cycle guard and the node budget matter (Mitsubishi UFJ's
+96-subsidiary fan-out is exactly the kind of hub node the budget exists for).
