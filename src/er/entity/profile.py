@@ -1,7 +1,7 @@
 """Assembles one EntityProfile: canonical identity + every attached identifier +
 GLEIF relationship neighborhood + SEC 13F activity summary (when available).
 
-This is the single place these joins are written - er.entity's CLI (and any
+This is the single place these joins are written - er.cli.entity (and any
 future consumer: an API, a graph UI) should call get_entity_profile() rather
 than re-deriving them.
 """
@@ -37,7 +37,7 @@ def _load_identifiers(cfg: AppConfig, entity_id: str) -> list[EntityIdentifier]:
 
 def _load_sec_13f_activity(cfg: AppConfig, entity_id: str) -> Sec13FActivity | None:
     """None means "no SEC 13F filer identifier resolved for this entity" - not
-    "this institution files nothing," which er.entity's CLI must render as an
+    "this institution files nothing," which er.cli.entity must render as an
     explicit "not a 13F filer / not yet resolved," never as a silent blank."""
     identifiers_path = cfg.entity.processed_dir / "entity_identifiers.parquet"
     filings_path = cfg.sec_13f.processed_dir / "sec_13f_filings.parquet"

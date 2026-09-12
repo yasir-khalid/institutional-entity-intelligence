@@ -70,8 +70,8 @@
 
 ## Two different questions, two different operations
 
-`er.match` answers "which ONE legal entity is this?" and correctly abstains when
-the query is a brand name that maps to many entities (e.g. "Point72"). `er.family`
+`er.cli.match` answers "which ONE legal entity is this?" and correctly abstains when
+the query is a brand name that maps to many entities (e.g. "Point72"). `er.cli.family`
 answers a genuinely different question — "which SET of legal entities make up
 this institution?" — and never forces a single winner; it groups results by
 confidence (HIGH/POSSIBLE) and role, using brand-core extraction plus GLEIF
@@ -80,7 +80,7 @@ relationship edges as confirming (not discovering) evidence. See
 
 ## Canonical entity layer
 
-`er.match`, `er.hierarchy`, and `er.family` all answer questions about GLEIF
+`er.cli.match`, `er.cli.hierarchy`, and `er.cli.family` all answer questions about GLEIF
 data specifically. `src/er/entity/` sits one level above that: it's the layer
 where GLEIF and every other onboarded source (currently SEC 13F) become facts
 about *one* canonical entity rather than two parallel systems joined by hand.
@@ -103,7 +103,7 @@ UNIONed together by `er.entity.build` - adding a new source's identifiers to
 every entity profile going forward is exactly one function + one line in that
 registry (see [`AGENTS.md`](../AGENTS.md)'s "Adding a new data source").
 
-`er.entity --name "..."` (or `--lei`) is the resulting single "tell me about
+`er.cli.entity --name "..."` (or `--lei`) is the resulting single "tell me about
 this institution" view: canonical identity, every attached identifier, the
 GLEIF relationship neighborhood, and - when the entity has been resolved as a
 SEC 13F filer via the crosswalk - its most recently reported holdings (always
@@ -125,6 +125,16 @@ matcher already answers for any name. This is the intended pattern for any
 future source (SEC Form ADV, FCA, Companies House, ...): ingest independently,
 then crosswalk through the existing matcher rather than writing new matching
 logic per source.
+
+## CLI separation
+
+Every CLI (`python -m er.cli.<name>`) lives under `src/er/cli/` and only does
+argument parsing and terminal rendering - no core package it calls
+(`er.matching`, `er.entity`, `er.family`, `er.graph`, `er.datasources`, ...)
+imports `argparse` or `rich`. This keeps every core package usable by a future
+non-terminal consumer (an API, a notebook) and keeps each testable without a
+live service or a captured terminal. See [`AGENTS.md`](../AGENTS.md)'s "CLI
+separation" section for the exact pattern to follow when adding a new command.
 
 ## Evaluation
 

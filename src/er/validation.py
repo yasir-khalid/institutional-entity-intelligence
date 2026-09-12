@@ -6,19 +6,17 @@ and how well relationships/exceptions/ISIN mappings line up with the entities ta
 
 DuckDB queries the Parquet files directly (no manual load-into-memory / pyarrow
 Acero join workarounds needed) and can spill to disk for tables larger than RAM.
+
+CLI entry point: `python -m er.cli.validate` (or `make validate`) - writes the
+report to disk, logs a summary, and exits non-zero on hard failures. This
+module's own validate_all() returns a plain dict with no I/O/exit-code concerns.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-import sys
-
 import duckdb
 
-from er.config import AppConfig, load_config
-
-logger = logging.getLogger(__name__)
+from er.config import AppConfig
 
 LEI_REGEX = r"^[0-9A-Z]{18}[0-9]{2}$"
 ISIN_REGEX = r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$"
@@ -167,27 +165,3 @@ def validate_all(cfg: AppConfig) -> dict:
         con.close()
     report.setdefault("hard_failures", [])
     return report
-
-
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
-    report = validate_all(cfg)
-
-    out_path = cfg.gleif.processed_dir / "validation_report.json"
-    out_path.write_text(json.dumps(report, indent=2))
-    logger.info("validation report written to %s", out_path)
-
-    for table_name, stats in report.items():
-        if table_name == "hard_failures":
-            continue
-        logger.info("%s: %s", table_name, {k: v for k, v in stats.items() if k != "null_rates"})
-
-    if report["hard_failures"]:
-        logger.error("hard failures: %s", report["hard_failures"])
-        sys.exit(1)
-    logger.info("validation passed with no hard failures")
-
-
-if __name__ == "__main__":
-    main()

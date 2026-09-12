@@ -79,25 +79,32 @@ make benchmark        # data/benchmark/*.parquet (~1 sec, DuckDB)
 
 ```bash
 # Raw candidate search - "what does OpenSearch think this could be"
-uv run python -m er.search --name "Sampo Oyj" --country FI
+uv run python -m er.cli.search --name "Sampo Oyj" --country FI
 
 # Full resolution - retrieve + score + decide, with evidence
-uv run python -m er.match --name "North Rock Capital" --country GB
+uv run python -m er.cli.match --name "North Rock Capital" --country GB
 
 # The canonical entity profile - identity + every attached identifier (LEI,
 # ISIN, SEC CIK, ...) + GLEIF relationships + SEC 13F activity, all one view
-uv run python -m er.entity --name "Fred Alger Management" --country US
+uv run python -m er.cli.entity --name "Fred Alger Management" --country US
 
 # Relationship hierarchy - who manages it, what it's a sub-fund of
-uv run python -m er.hierarchy --name "Albacore Partners I Master Fund" --country IE --depth 2
+uv run python -m er.cli.hierarchy --name "Albacore Partners I Master Fund" --country IE --depth 2
 
 # Brand/family discovery - which SET of legal entities make up this institution
-uv run python -m er.family --name "Point72"
+uv run python -m er.cli.family --name "Point72"
 
 # Crosswalk SEC 13F filers to GLEIF LEIs, then rebuild the canonical entity layer
 make crosswalk-sec-13f
 make build-entities
 ```
+
+Every CLI lives under `er.cli` (`python -m er.cli.<name>`) - a deliberate
+separation from the core ETL/entity-resolution packages, which never import
+`argparse` or `rich` and stay usable from a future API or notebook without
+dragging in terminal-presentation code. Each CLI also shows a progress
+spinner while it fetches (rather than a blank screen) and reports how long it
+took.
 
 Run `make help` for the full target list. All CLIs support `--country` (ISO
 alpha-2 or a common alias like `UK`/`Cayman Islands`) and `--country-mode
@@ -106,10 +113,9 @@ soft|strict`.
 ## Testing
 
 ```bash
-make test                                    # unit tests, no live services, ~5s
-uv run python -m er.evaluation.run_benchmark  # scores er.match against the full
-                                               # benchmark (~7 min, needs live
-                                               # OpenSearch) -> evaluation_report.json
+make test               # unit tests, no live services, ~5s
+make evaluate            # scores the matcher against the full benchmark (~7 min,
+                         # needs live OpenSearch) -> evaluation_report.json
 ```
 
 `make test` covers every pure function (normalization, matcher features/scoring/
@@ -122,22 +128,30 @@ pass alone doesn't confirm the live system behaves correctly.
 
 ```
 src/er/
+├── cli/                    # every CLI (python -m er.cli.<name>) - argument
+│                             parsing + rendering only, never core logic
 ├── datasources/<source>/   # one folder per data source, owns its own ETL end to end
 ├── normalisation/          # pure name/address/country normalization
 ├── retrieval/              # OpenSearch query building + candidate search
-├── matching/               # features -> score -> decision (er.match)
-├── family/                 # brand/family discovery (er.family)
-├── graph/                  # relationship hierarchy (er.hierarchy)
+├── matching/               # features -> score -> decision (er.cli.match)
+├── family/                 # brand/family discovery logic (er.cli.family)
+├── graph/                  # relationship hierarchy logic (er.cli.hierarchy)
 ├── crosswalk/              # resolve another source's records to a GLEIF LEI
 ├── entity/                 # canonical entity layer: one entity, identifiers
-│                             from every source (er.entity) - see sources.py to
-│                             add a new source's identifiers with one function
+│                             from every source (er.cli.entity) - see sources.py
+│                             to add a new source's identifiers with one function
 ├── evaluation/             # benchmark scoring + failure-analysis metrics
 └── benchmark/              # auto-generated evaluation pairs
 
 experiments/   # proof-backed retrieval/scoring experiments (VALIDATED/INVALIDATED)
 docs/          # architecture detail, full phase-by-phase build history
 ```
+
+None of the packages above import `argparse` or `rich` - every CLI's argument
+parsing and terminal rendering lives in `src/er/cli/`, which imports *from*
+those packages, never the other way around. This keeps core logic usable by a
+future API/notebook without dragging in display code, and testable without a
+live service.
 
 More detail: [`AGENTS.md`](AGENTS.md) (repo map + design decisions for anyone —
 human or agent — working in this codebase), [`docs/architecture.md`](docs/architecture.md),

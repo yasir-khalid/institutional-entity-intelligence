@@ -1,12 +1,14 @@
-"""CLI: python -m er.match --name "Albacore Partners I Master Fund" --country IE
+"""CLI: python -m er.cli.match --name "Albacore Partners I Master Fund" --country IE
 
-Unlike er.search (retrieval only - a ranked candidate list), this runs the full
-retrieve -> score -> decide pipeline and prints the decision with its evidence.
+Unlike er.cli.search (retrieval only - a ranked candidate list), this runs the
+full retrieve -> score -> decide pipeline and prints the decision with its
+evidence.
 """
 
 from __future__ import annotations
 
 import argparse
+import time
 
 from rich.console import Console
 from rich.panel import Panel
@@ -44,17 +46,20 @@ def main() -> None:
 
     console = Console()
     cfg = load_config()
-    client = get_client(cfg)
-    result = match(
-        client,
-        cfg,
-        args.name,
-        args.country,
-        args.postcode,
-        args.city,
-        args.registration_id,
-        args.country_mode,
-    )
+    started = time.monotonic()
+    with console.status(f'[bold cyan]Matching "{args.name}"...[/bold cyan]'):
+        client = get_client(cfg)
+        result = match(
+            client,
+            cfg,
+            args.name,
+            args.country,
+            args.postcode,
+            args.city,
+            args.registration_id,
+            args.country_mode,
+        )
+    elapsed = time.monotonic() - started
 
     style = DECISION_STYLE[result.decision]
     header = Text(result.decision.value, style=style)
@@ -118,6 +123,7 @@ def main() -> None:
             str(c.rank), f"{marker}{c.legal_name}", c.lei, retrieval, f"{c.score:.2f}", style=row_style
         )
     console.print(candidates_table)
+    console.print(f"\n[dim]Fetched in {elapsed:.2f}s[/dim]")
 
 
 if __name__ == "__main__":

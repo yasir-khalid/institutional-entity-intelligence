@@ -5,6 +5,9 @@
 help:
 	@echo "Institutional Entity Intelligence - available targets:"
 	@echo ""
+	@echo "  All CLIs live under er.cli (python -m er.cli.<name>) - a strict separation from"
+	@echo "  the core ETL/entity-resolution packages, which never import argparse or rich."
+	@echo ""
 	@echo "  Data sources (each isolated under src/er/datasources/<source>/):"
 	@echo "    make ingest-gleif    Parse raw GLEIF files -> data/processed/*.parquet (~10-15 min)"
 	@echo "    make ingest-sec-13f  Parse raw SEC 13F bulk data -> data/processed/*.parquet (~1-2 min)"
@@ -25,12 +28,13 @@ help:
 	@echo ""
 	@echo "  Testing:"
 	@echo "    make test            Unit test suite (no live services needed, ~5s)"
-	@echo "    make evaluate        Score er.match against the full benchmark (needs live OpenSearch, ~7 min)"
+	@echo "    make evaluate        Score the matcher against the full benchmark (needs live OpenSearch, ~7 min)"
 	@echo ""
 	@echo "  CLIs take runtime arguments, so they aren't Make targets - run directly, e.g.:"
-	@echo "    uv run python -m er.match --name \"...\" --country XX"
-	@echo "    uv run python -m er.family --name \"...\""
-	@echo "    uv run python -m er.hierarchy --lei ... --depth 2"
+	@echo "    uv run python -m er.cli.match --name \"...\" --country XX"
+	@echo "    uv run python -m er.cli.family --name \"...\""
+	@echo "    uv run python -m er.cli.hierarchy --lei ... --depth 2"
+	@echo "    uv run python -m er.cli.entity --name \"...\" --country XX"
 
 # --- Data sources ------------------------------------------------------------
 # One target per source, each running only that source's own ingest module.
@@ -38,26 +42,26 @@ help:
 # parsing end to end and never imports another source's code.
 
 ingest-gleif:
-	uv run python -m er.datasources.gleif.ingest
+	uv run python -m er.cli.ingest_gleif
 
 ingest-sec-13f:
-	uv run python -m er.datasources.sec_13f.ingest
+	uv run python -m er.cli.ingest_sec_13f
 
 # ingest-sec-adv:
-# 	uv run python -m er.datasources.sec_adv.ingest
+# 	uv run python -m er.cli.ingest_sec_adv
 
 INGEST_TARGETS := ingest-gleif ingest-sec-13f
 
 # --- Shared pipeline (source-agnostic) ---------------------------------------
 
 index:
-	uv run python -m er.indexing.opensearch_index
+	uv run python -m er.cli.index
 
 validate:
-	uv run python -m er.validation
+	uv run python -m er.cli.validate
 
 benchmark:
-	uv run python -m er.benchmark.generate
+	uv run python -m er.cli.benchmark
 
 pipeline: $(INGEST_TARGETS) index validate benchmark
 
@@ -65,14 +69,14 @@ pipeline: $(INGEST_TARGETS) index validate benchmark
 # Reuses er.matching.matcher.match() unchanged - needs a live, indexed OpenSearch.
 
 crosswalk-sec-13f:
-	uv run python -m er.crosswalk.sec_13f_to_gleif
+	uv run python -m er.cli.crosswalk_sec_13f
 
 # --- Canonical entity layer ---------------------------------------------------
 # Rebuilds entities.parquet + entity_identifiers.parquet from GLEIF plus every
 # registered source in er.entity.sources (run after ingest + any crosswalk).
 
 build-entities:
-	uv run python -m er.entity.build
+	uv run python -m er.cli.build_entities
 
 # --- Testing ------------------------------------------------------------------
 
@@ -80,4 +84,4 @@ test:
 	uv run pytest
 
 evaluate:
-	uv run python -m er.evaluation.run_benchmark
+	uv run python -m er.cli.evaluate

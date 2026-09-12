@@ -1,6 +1,6 @@
-"""Terminal rendering for an EntityProfile - kept separate from profile.py/
-models.py/build.py/sources.py (the actual entity-resolution logic) so that core
-logic never depends on rich or any other presentation concern, and so a future
+"""Terminal rendering for an EntityProfile - lives under er.cli, not er.entity,
+so the core entity-resolution package (models.py/build.py/sources.py/profile.py)
+never depends on rich or any other presentation concern, and a future
 non-terminal consumer (an API, a notebook) can import er.entity.profile without
 pulling in display code at all. This module takes a finished EntityProfile and
 a rich Console and only ever prints - it never resolves, queries, or builds
@@ -17,7 +17,7 @@ from er.entity.models import EntityIdentifier, EntityProfile
 # High-cardinality lists (an entity can have dozens of ISINs, or a manager can
 # have 40+ funds under it) are collapsed to a count + sample so the profile
 # stays a quick overview, not a full dump - full detail always lives in the
-# underlying Parquet tables (entity_identifiers.parquet) or in er.hierarchy's
+# underlying Parquet tables (entity_identifiers.parquet) or in er.cli.hierarchy's
 # dedicated multi-hop view for relationships specifically.
 COLLAPSE_THRESHOLD = 5
 
@@ -54,7 +54,7 @@ def _render_relationships(console: Console, profile: EntityProfile) -> None:
     # Grouped by (direction, label) rather than one row per edge - a manager
     # with 40+ funds must not flood this table the way it did before this fix;
     # a group over the collapse threshold shows a count + a few examples, with
-    # `er.hierarchy --lei ... --direction ... ` pointed to for the full list.
+    # `er.cli.hierarchy --lei ... --direction ...` pointed to for the full list.
     groups: dict[tuple[str, str], list] = {}
     for edge in hierarchy.upward:
         groups.setdefault(("Upward", edge.label), []).append(edge.name or edge.lei)
@@ -75,7 +75,7 @@ def _render_relationships(console: Console, profile: EntityProfile) -> None:
             table.add_row(direction, label, ", ".join(names))
     console.print(table)
     if any(len(names) > COLLAPSE_THRESHOLD for names in groups.values()):
-        console.print(f"[dim]Full detail: uv run python -m er.hierarchy --lei {profile.entity_id}[/dim]")
+        console.print(f"[dim]Full detail: uv run python -m er.cli.hierarchy --lei {profile.entity_id}[/dim]")
 
 
 def _render_sec_13f(console: Console, profile: EntityProfile) -> None:

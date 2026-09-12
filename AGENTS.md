@@ -9,9 +9,22 @@ deliberate decision.
 
 ```
 src/er/
+├── cli/                      # EVERY CLI lives here (python -m er.cli.<name>) -
+│                             argument parsing + terminal rendering only. Zero
+│                             business logic. Nothing outside this package may
+│                             import argparse or rich - see "CLI separation"
+│                             below. One file per command: match.py, search.py,
+│                             hierarchy.py, family.py, entity.py (+
+│                             entity_render.py for its rendering),
+│                             ingest_gleif.py, ingest_sec_13f.py, index.py,
+│                             validate.py, benchmark.py, evaluate.py,
+│                             crosswalk_sec_13f.py, build_entities.py.
 ├── datasources/<source>/   # one folder per data source (gleif, sec_13f, ...) -
 │                             owns its OWN raw-file parsing, pydantic models,
-│                             pyarrow schema, and ingest.py end to end.
+│                             pyarrow schema, and ingest.py end to end. Each
+│                             ingest.py exposes a plain run_all(cfg) -> dict
+│                             function - no main()/argparse/logging.basicConfig
+│                             here, that's er.cli.ingest_<source>'s job.
 │   └── common/             # ONLY truly source-agnostic helpers
 │                             (BatchedParquetWriter, xml_utils) - no source-
 │                             specific field/schema knowledge belongs here.
@@ -19,23 +32,24 @@ src/er/
 │                             names.py, addresses.py, countries.py. No I/O.
 ├── indexing/                 # OpenSearch index mapping + bulk load
 │                             (opensearch_index.py) - candidate retrieval only,
-│                             never the system of record.
+│                             never the system of record. CLI: er.cli.index.
 ├── retrieval/                # candidates.py - builds the OpenSearch query,
 │                             search_candidates(). Retrieval-relevance score
 │                             only, not a match decision.
-├── matching/                  # er.match: features.py (pure comparison signals)
-│                             -> scoring.py (config-driven weighted sum) ->
+├── matching/                  # features.py (pure comparison signals) ->
+│                             scoring.py (config-driven weighted sum) ->
 │                             decisions.py (score+gap -> AUTO_MATCH/REVIEW/
 │                             UNMATCHED) -> matcher.py (the only file here that
-│                             calls OpenSearch).
-├── family/                    # er.family: brand/family discovery - a
-│                             DIFFERENT operation from matching (a set of
-│                             entities, not one winner). brand.py is pure.
-├── graph/                     # er.hierarchy: relationship traversal over
-│                             GLEIF's relationship/exception tables.
+│                             calls OpenSearch). CLI: er.cli.match.
+├── family/                    # brand/family discovery logic - a DIFFERENT
+│                             operation from matching (a set of entities, not
+│                             one winner). brand.py is pure. CLI: er.cli.family.
+├── graph/                     # relationship traversal over GLEIF's
+│                             relationship/exception tables. CLI: er.cli.hierarchy.
 ├── crosswalk/                  # resolve ANOTHER source's records to a GLEIF
 │                             LEI, by calling er.matching.matcher.match()
 │                             unchanged - never reimplement matching per source.
+│                             CLI: er.cli.crosswalk_<source>.
 ├── entity/                     # canonical entity layer - entities.parquet (one
 │                             row per entity) + entity_identifiers.parquet (every
 │                             identifier any source has attached). sources.py is
@@ -43,15 +57,17 @@ src/er/
 │                             identifiers in - see "Adding a new data source"
 │                             below. profile.py assembles the single
 │                             request-level EntityProfile (identity + IDs +
-│                             GLEIF relationships + SEC 13F activity) that
-│                             er.entity's CLI renders.
+│                             GLEIF relationships + SEC 13F activity). CLI:
+│                             er.cli.entity (rendering in er.cli.entity_render);
+│                             build.py's run_all() has its own CLI: er.cli.build_entities.
 ├── benchmark/                  # auto-generates evaluation_pairs.parquet from
 │                             the ISIN<->LEI bridge + intra-GLEIF confusable
-│                             pairs. No manual labeling.
+│                             pairs. No manual labeling. CLI: er.cli.benchmark.
 ├── evaluation/                 # runs the matcher against the benchmark,
 │                             reports Recall@K/MRR/precision + failure_breakdown
-│                             (metrics.py is pure; run_benchmark.py is the only
-│                             file that hits live OpenSearch here).
+│                             (metrics.py is pure; run_benchmark.py's
+│                             evaluate()/build_report() are the only functions
+│                             here that hit live OpenSearch). CLI: er.cli.evaluate.
 └── config.py                   # every tunable (weights, penalties, thresholds,
                               batch sizes, index settings) lives in
                               config/dev.yaml, loaded through this - a retune
@@ -64,6 +80,43 @@ tests/         # mirrors src/er/ - pure functions get synthetic-fixture unit
                # tests; nothing here touches live OpenSearch (see er.evaluation
                # for that).
 ```
+
+## CLI separation
+
+Every CLI lives under `src/er/cli/`, invoked as `python -m er.cli.<name>`.
+Nothing outside that package may import `argparse` or `rich` - this is
+enforced by convention, not tooling, so check it explicitly: `grep -rl "import
+argparse\|import rich\|from rich" src/er/ --include="*.py" | grep -v
+"^src/er/cli/"` should print nothing.
+
+Why: it keeps every core package (`er.matching`, `er.entity`, `er.family`,
+`er.graph`, `er.datasources`, `er.crosswalk`, `er.benchmark`, `er.evaluation`,
+`er.indexing`, `er.validation`) importable by a future non-terminal consumer
+(an API, a notebook, a background job) without dragging in display code, and
+keeps each of those packages testable without a live service or a captured
+terminal. Rendering itself is also kept separate from CLI wiring when it's
+non-trivial (see `er.cli.entity_render` vs `er.cli.entity`): a rendering
+function takes a finished result object and a `Console` and only ever prints -
+it never resolves, queries, or builds anything itself.
+
+**The pattern for a new CLI-backed module:**
+1. Core logic module (e.g. `er.entity.build`) exposes a plain `run_all(cfg) ->
+   dict` (or equivalent) with no `main()`, no `argparse`, no
+   `logging.basicConfig()`, no `sys.exit()`.
+2. `src/er/cli/<name>.py` does argument parsing, calls the core function
+   (usually inside a `console.status("...")` spinner so the terminal never
+   sits blank), and prints a `Fetched in {elapsed:.2f}s` summary at the end.
+3. If rendering is more than a few `console.print()` calls, split it into its
+   own `er/cli/<name>_render.py` (pure presentation, no live-service imports)
+   so it can be unit-tested with a `Console(file=io.StringIO())` - see
+   `tests/test_entity_render.py`.
+4. Register the command in the `Makefile` (if it takes no runtime arguments)
+   or document it directly (if it does, like `--name`/`--lei`).
+
+A rendering function must also collapse high-cardinality output (many
+identifiers, many relationship edges) to a count + sample rather than dumping
+every row - see `er.cli.entity_render`'s `COLLAPSE_THRESHOLD` pattern (an
+entity with 45 managed funds or 900 ISINs must not flood the terminal).
 
 ## Adding a new data source, end to end
 
@@ -87,7 +140,7 @@ touching another source's code or the canonical entity layer's internals:
    returning a SQL SELECT over your crosswalk's output, aliased to
    `entity_id, identifier_type, identifier_value, confidence, source`, filtered
    to non-UNMATCHED rows. Append it to `IDENTIFIER_SOURCES`. That's the entire
-   integration - `er.entity.build` and `er.entity`'s CLI need no other changes.
+   integration - `er.entity.build` and `er.cli.entity` need no other changes.
 4. **(Optional) Attach richer activity data to `EntityProfile`**: if the source
    has its own "latest observation" concept worth showing on `er.entity`'s
    profile (like `Sec13FActivity`), add a model to `src/er/entity/models.py`
@@ -95,7 +148,7 @@ touching another source's code or the canonical entity layer's internals:
    `_load_sec_13f_activity` - guard it the same way (return `None` when the
    source's data isn't available for this entity, never raise).
 5. `make build-entities` to rebuild the canonical layer, then
-   `uv run python -m er.entity --lei ...` to see the new source's data appear.
+   `uv run python -m er.cli.entity --lei ...` to see the new source's data appear.
 
 ## Design decisions (and why)
 
@@ -154,19 +207,6 @@ low `AUTO_MATCH` coverage rate by shrinking the gap threshold without checking
 `make evaluate` run — a wrong entity picked confidently is the single worst
 failure mode this project optimizes against, worse than no match at all.
 
-**Terminal rendering stays out of core logic modules.** `er.entity` splits
-`profile.py`/`build.py`/`sources.py`/`models.py` (zero dependency on rich or
-argparse) from `render.py` (presentation only - takes a finished
-`EntityProfile` and a `Console`, never resolves or queries anything itself)
-from `__main__.py` (argument parsing + wiring only). This is stricter than the
-older CLIs (`er.match`, `er.hierarchy`, `er.family` mix rendering into their
-single-file CLI module) - prefer the `er.entity` split for new modules, since
-it keeps core logic importable (by a future API, a notebook, another CLI)
-without dragging in display code, and keeps rendering testable without a live
-service. A rendering function must also collapse high-cardinality output (many
-identifiers, many relationship edges) to a count + sample rather than dumping
-every row - see `render.py`'s `COLLAPSE_THRESHOLD` pattern.
-
 **A benchmark hard-negative must be checked for third-party collisions.** Any
 strategy that mutates a real name into an adversarial query (stripping tokens,
 abbreviating) can accidentally produce a string that is also the exact, correct
@@ -183,7 +223,7 @@ numbers can be trusted.
 unqualified.** Form 13F covers only certain reportable US equity securities as
 of one quarterly date - it excludes shorts, derivatives, non-US securities,
 private investments, and positions below reporting thresholds. Any UI/CLI text
-showing 13F data (see `er.entity`'s renderer) must carry this caveat explicitly;
+showing 13F data (see `er.cli.entity_render`) must carry this caveat explicitly;
 don't let it read like a complete picture of an institution's holdings.
 
 ## Working on retrieval/scoring: use `experiments/`
@@ -219,5 +259,5 @@ a change is never "it seemed like it should help" without a number attached.
 - Never commit `.env` or credentials; `data/` and `.env` are gitignored.
 - Prefer DuckDB over pyarrow for joins/aggregations/analytical queries directly
   on Parquet; pyarrow is for streaming Parquet writing/reading only.
-- Use `rich` for CLI output (tables/panels), consistent with `er.match`,
-  `er.family`, `er.hierarchy`.
+- Use `rich` for CLI output (tables/panels), consistent with the rest of
+  `er.cli` - and only inside `er.cli`, per the "CLI separation" rule above.

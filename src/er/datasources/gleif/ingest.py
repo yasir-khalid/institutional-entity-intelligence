@@ -10,10 +10,11 @@ model (er.datasources.gleif.models) -> written to Parquet. That middle step is a
 real data-quality gate, not decoration - a malformed record fails loudly here
 rather than silently reaching the canonical store.
 
-Entry point: `python -m er.datasources.gleif.ingest` (or `make ingest-gleif`) runs
-all four of GLEIF's raw files (entities, relationships, exceptions, ISIN<->LEI) as
-one pipeline - see isin_lei.py for the fourth parser, kept in its own file since
-it's a plain CSV, not XML.
+`run_all()` runs all four of GLEIF's raw files (entities, relationships,
+exceptions, ISIN<->LEI) as one pipeline - see isin_lei.py for the fourth
+parser, kept in its own file since it's a plain CSV, not XML. CLI entry point:
+`python -m er.cli.ingest_gleif` (or `make ingest-gleif`) - see er/cli/ for the
+logging setup and summary printing; this module has no CLI concerns itself.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from pathlib import Path
 import duckdb
 from lxml import etree
 
-from er.config import AppConfig, load_config
+from er.config import AppConfig
 from er.datasources.common.parquet_writer import BatchedParquetWriter
 from er.datasources.common.xml_utils import clear_element, element_text, open_zip_member
 from er.datasources.gleif.fields import (
@@ -267,21 +268,13 @@ def parse_relationship_exceptions(cfg: AppConfig) -> int:
     return count
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
-    n_entities = parse_entities(cfg)
-    n_rels = parse_relationships(cfg)
-    n_exceptions = parse_relationship_exceptions(cfg)
-    n_isin_lei = parse_isin_lei(cfg)
-    logger.info(
-        "ingestion complete: %d entities, %d relationships, %d relationship_exceptions, %d isin_lei",
-        n_entities,
-        n_rels,
-        n_exceptions,
-        n_isin_lei,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def run_all(cfg: AppConfig) -> dict[str, int]:
+    """Runs all four GLEIF raw-file parsers as one pipeline. Pure orchestration,
+    no logging setup/CLI concerns - see er.cli.ingest_gleif for the command-line
+    entry point that calls this and prints a summary."""
+    return {
+        "entities": parse_entities(cfg),
+        "relationships": parse_relationships(cfg),
+        "relationship_exceptions": parse_relationship_exceptions(cfg),
+        "isin_lei": parse_isin_lei(cfg),
+    }

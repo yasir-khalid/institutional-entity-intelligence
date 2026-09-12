@@ -1,15 +1,17 @@
 """Crosswalk: resolve each unique SEC Form 13F filer to a GLEIF LEI.
 
 Reuses er.matching.matcher.match() unchanged - a 13F filer name is exactly the same
-"which single legal entity is this?" question er.match already answers for any other
-source, so there is no separate matching logic here. This module's only job is to
-adapt 13F's fields into match()'s inputs and persist the results as a crosswalk table
-(one row per unique filer, not per filing - a filer appears in many quarterly filings
-under the same CIK/name).
+"which single legal entity is this?" question that function already answers for any
+other source, so there is no separate matching logic here. This module's only job is
+to adapt 13F's fields into match()'s inputs and persist the results as a crosswalk
+table (one row per unique filer, not per filing - a filer appears in many quarterly
+filings under the same CIK/name).
 
 Output: data/processed/crosswalk_sec_13f_gleif.parquet - filer_name, cik, crd_number,
 resolved lei/decision/score, so any downstream query can join 13F holdings straight
 through to GLEIF-anchored entity data.
+
+CLI entry point: `python -m er.cli.crosswalk_sec_13f` (or `make crosswalk-sec-13f`).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 
-from er.config import AppConfig, load_config
+from er.config import AppConfig
 from er.datasources.common.parquet_writer import PROVENANCE_FIELDS, BatchedParquetWriter
 from er.indexing.opensearch_index import get_client
 from er.matching.matcher import match
@@ -141,12 +143,3 @@ def build_crosswalk(cfg: AppConfig, out_path: Path | None = None) -> int:
     return len(filers)
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
-    n = build_crosswalk(cfg)
-    logger.info("crosswalk complete: %d unique filers resolved", n)
-
-
-if __name__ == "__main__":
-    main()

@@ -13,7 +13,7 @@ import re
 import time
 from datetime import datetime, timezone
 
-from er.config import AppConfig, load_config
+from er.config import AppConfig
 from er.datasources.common.parquet_writer import BatchedParquetWriter
 from er.datasources.common.xml_utils import open_zip_member
 from er.datasources.gleif.models import IsinLei
@@ -69,13 +69,3 @@ def parse_isin_lei(cfg: AppConfig) -> int:
     stream.close()
     logger.info("isin_lei: done, %d records -> %s", count, out_path)
     return count
-
-
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
-    parse_isin_lei(cfg)
-
-
-if __name__ == "__main__":
-    main()

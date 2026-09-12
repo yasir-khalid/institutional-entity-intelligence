@@ -42,7 +42,7 @@ class EntityProfile(BaseModel):
     """The single request-level view of a canonical entity - identity, every
     identifier attached to it by any registered source, its GLEIF relationship
     neighborhood, and (when available) its SEC 13F filing activity. This is the
-    shape er.entity's CLI renders and the shape any future consumer (an API, a
+    shape er.cli.entity renders and the shape any future consumer (an API, a
     graph UI) should reuse rather than re-deriving these joins itself."""
 
     entity_id: str

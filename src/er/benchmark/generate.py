@@ -24,7 +24,6 @@ Outputs (data/benchmark/):
 from __future__ import annotations
 
 import logging
-import time
 import zlib
 from pathlib import Path
 
@@ -32,7 +31,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from er.config import AppConfig, load_config
+from er.config import AppConfig
 from er.normalisation.names import normalize_name
 
 logger = logging.getLogger(__name__)
@@ -291,17 +290,11 @@ def build_evaluation_pairs(cfg: AppConfig, positives_path: Path, hard_negatives_
     return out_path
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
+def run_all(cfg: AppConfig) -> None:
+    """Runs the full benchmark-generation pipeline. Pure orchestration, no
+    logging setup/CLI concerns - see er.cli.benchmark for the command-line
+    entry point that calls this and times it."""
     cfg.benchmark.output_dir.mkdir(parents=True, exist_ok=True)
-
-    started = time.monotonic()
     positives_path = generate_positives(cfg)
     hard_negatives_path = generate_hard_negatives(cfg)
     build_evaluation_pairs(cfg, positives_path, hard_negatives_path)
-    logger.info("benchmark generation complete in %.0fs", time.monotonic() - started)
-
-
-if __name__ == "__main__":
-    main()

@@ -1,5 +1,5 @@
-"""CLI: python -m er.hierarchy --lei <LEI> [--direction parents|children|all] [--depth N]
-   or:  python -m er.hierarchy --name "..." --country XX   (resolves via er.match first)
+"""CLI: python -m er.cli.hierarchy --lei <LEI> [--direction parents|children|all] [--depth N]
+   or:  python -m er.cli.hierarchy --name "..." --country XX   (resolves via er.cli.match first)
 
 Given an LEI (or a messy name+country that gets resolved to one first), shows its
 GLEIF relationship neighborhood: parents/managers/master-fund upward, subsidiaries/
@@ -15,6 +15,7 @@ node-budget-capped - see er.graph.build.build_hierarchy_tree.
 from __future__ import annotations
 
 import argparse
+import time
 
 from rich.console import Console
 from rich.tree import Tree
@@ -77,13 +78,13 @@ def render(console: Console, root: HierarchyNode, direction: str = "all") -> Non
 def main() -> None:
     parser = argparse.ArgumentParser(description="Show the GLEIF relationship hierarchy for an entity")
     parser.add_argument("--lei", default=None)
-    parser.add_argument("--name", default=None, help="resolve this name via er.match first")
+    parser.add_argument("--name", default=None, help="resolve this name via er.cli.match first")
     parser.add_argument("--country", default=None, help="ISO alpha-2 or common alias, used only with --name")
     parser.add_argument(
         "--country-mode",
         default="soft",
         choices=["soft", "strict"],
-        help="only used when resolving via --name (see er.match --help)",
+        help="only used when resolving via --name (see er.cli.match --help)",
     )
     parser.add_argument(
         "--direction",
@@ -102,6 +103,7 @@ def main() -> None:
 
     console = Console()
     cfg = load_config()
+    started = time.monotonic()
 
     lei = args.lei
     if not lei:
@@ -111,8 +113,9 @@ def main() -> None:
         from er.indexing.opensearch_index import get_client
         from er.matching.matcher import match
 
-        client = get_client(cfg)
-        result = match(client, cfg, args.name, args.country, country_mode=args.country_mode)
+        with console.status(f'[bold cyan]Resolving "{args.name}"...[/bold cyan]'):
+            client = get_client(cfg)
+            result = match(client, cfg, args.name, args.country, country_mode=args.country_mode)
         if not result.lei:
             console.print(
                 f'[red]Could not resolve "{args.name}" to a confident entity '
@@ -124,8 +127,12 @@ def main() -> None:
         console.print(f'Resolved "{args.name}" -> {result.lei}  (decision: {result.decision.value})\n')
         lei = result.lei
 
-    root = build_hierarchy_tree(cfg, lei, depth=args.depth, direction=args.direction)
+    with console.status(f"[bold cyan]Walking relationship graph (depth={args.depth})...[/bold cyan]"):
+        root = build_hierarchy_tree(cfg, lei, depth=args.depth, direction=args.direction)
+    elapsed = time.monotonic() - started
+
     render(console, root, args.direction)
+    console.print(f"\n[dim]Fetched in {elapsed:.2f}s[/dim]")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
-"""CLI: python -m er.search --name "Albacore Partners I Master Fund" --country IE"""
+"""CLI: python -m er.cli.search --name "Albacore Partners I Master Fund" --country IE"""
 
 from __future__ import annotations
 
 import argparse
+import time
 
 from rich.console import Console
 from rich.table import Table
@@ -28,8 +29,11 @@ def main() -> None:
 
     console = Console()
     cfg = load_config()
-    client = get_client(cfg)
-    results = search_candidates(client, cfg, args.name, args.country, args.size, args.country_mode)
+    started = time.monotonic()
+    with console.status(f'[bold cyan]Searching for "{args.name}"...[/bold cyan]'):
+        client = get_client(cfg)
+        results = search_candidates(client, cfg, args.name, args.country, args.size, args.country_mode)
+    elapsed = time.monotonic() - started
 
     if not results:
         console.print("[dim]No candidates found.[/dim]")
@@ -52,6 +56,7 @@ def main() -> None:
             f"{r['score']:.2f}",
         )
     console.print(table)
+    console.print(f"\n[dim]Fetched in {elapsed:.2f}s[/dim]")
 
 
 if __name__ == "__main__":

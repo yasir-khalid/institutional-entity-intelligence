@@ -465,3 +465,43 @@ change analysis is possible yet), a dedicated crosswalk-precision evaluation
 harness (distinct from the general GLEIF benchmark), and Form ADV/FCA/Companies
 House as additional sources (the registry pattern above is what makes each of
 those a small, additive change whenever undertaken).
+
+## Phase 12: strict CLI/core-logic separation (`er.cli`)
+
+Every CLI in the project - `er.match`, `er.search`, `er.hierarchy`,
+`er.family`, `er.entity`, plus the previously argparse-less `main()` functions
+in `er.datasources.gleif.ingest`, `er.datasources.sec_13f.ingest`,
+`er.indexing.opensearch_index`, `er.validation`, `er.benchmark.generate`,
+`er.evaluation.run_benchmark`, `er.crosswalk.sec_13f_to_gleif`, and
+`er.entity.build` - moved into one package: `src/er/cli/`, invoked as
+`python -m er.cli.<name>`. This was a deliberate architectural line, not a
+cosmetic move: no package outside `er.cli` may import `argparse` or `rich`.
+
+Each moved core module now exposes a plain `run_all(cfg) -> dict` (or
+equivalent) instead of a `main()` - no logging setup, no `sys.exit()`, no
+argument parsing. The corresponding `er/cli/<name>.py` does that wiring and
+adds a `console.status(...)` spinner around the work plus a `Fetched in
+{elapsed:.2f}s` summary line at the end, so a multi-second live-service call
+never leaves a blank terminal. `er.entity`'s rendering, already split into its
+own `render.py` in the prior phase, moved to `er/cli/entity_render.py`
+alongside the other CLI code, and that render function was fixed to group and
+collapse high-fan-out relationship edges (a manager with 45 funds was
+flooding the table one row per edge) the same way high-cardinality
+identifiers were already collapsed.
+
+All `Makefile` targets and documented `uv run python -m er.X` commands were
+updated to the new `er.cli.X` paths - `make help`, `README.md`, `AGENTS.md`,
+and `docs/architecture.md` are the sources of truth for current invocations;
+this file's earlier phases keep their original `python -m er.X` examples
+as-written, since they're a historical record of what was true when each
+phase shipped, not a living reference.
+
+### Verify
+
+```bash
+make test                                          # 142 unit tests, unaffected
+grep -rl "import argparse\|import rich\|from rich" src/er/ --include="*.py" | grep -v "^src/er/cli/"
+                                                    # -> prints nothing
+uv run python -m er.cli.match --name "Sampo Oyj" --country FI
+uv run python -m er.cli.entity --lei R2I72C950HOYXII45366
+```

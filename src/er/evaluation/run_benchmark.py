@@ -1,22 +1,21 @@
-"""CLI: python -m er.evaluation.run_benchmark
-
-Runs the deterministic matcher (er.matching.matcher) against every row of
+"""Runs the deterministic matcher (er.matching.matcher) against every row of
 data/benchmark/evaluation_pairs.parquet and reports retrieval/decision quality.
 Makes one live OpenSearch query per row - this is a one-off evaluation script, not
 something wired into a hot path, so no batching/parallelism in this first pass.
+
+CLI entry point: `python -m er.cli.evaluate` (or `make evaluate`) - writes the
+report to disk and logs a summary. This module's evaluate()/build_report() have
+no I/O concerns of their own.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 
 import pyarrow.parquet as pq
 
-from er.config import load_config
 from er.evaluation.metrics import RowResult, summarize
-from er.indexing.opensearch_index import get_client
 from er.matching.matcher import match
 
 logger = logging.getLogger(__name__)
@@ -74,19 +73,3 @@ def build_report(results: list[RowResult]) -> dict:
     }
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
-    client = get_client(cfg)
-
-    results = evaluate(cfg, client)
-    report = build_report(results)
-
-    out_path = cfg.benchmark.output_dir / "evaluation_report.json"
-    out_path.write_text(json.dumps(report, indent=2))
-    logger.info("evaluation report written to %s", out_path)
-    logger.info("overall: %s", report["overall"])
-
-
-if __name__ == "__main__":
-    main()

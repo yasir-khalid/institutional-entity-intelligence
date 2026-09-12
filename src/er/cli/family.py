@@ -1,16 +1,18 @@
-"""CLI: python -m er.family --name "Point72"
+"""CLI: python -m er.cli.family --name "Point72"
 
-Different operation from er.match: retrieves and groups the SET of legal entities
-that make up a brand/institutional family, rather than resolving to one entity.
-Never forces a single winner - members are grouped by confidence (HIGH: exact
-brand-core match; POSSIBLE: a real sub-brand or lookalike that extends the brand
-core but isn't identical) and role (management vs. fund/vehicle), with any
-confirming GLEIF relationship evidence shown separately.
+Different operation from er.cli.match: retrieves and groups the SET of legal
+entities that make up a brand/institutional family, rather than resolving to
+one entity. Never forces a single winner - members are grouped by confidence
+(HIGH: exact brand-core match; POSSIBLE: a real sub-brand or lookalike that
+extends the brand core but isn't identical) and role (management vs.
+fund/vehicle), with any confirming GLEIF relationship evidence shown
+separately.
 """
 
 from __future__ import annotations
 
 import argparse
+import time
 
 from rich.console import Console
 from rich.table import Table
@@ -70,9 +72,14 @@ def main() -> None:
 
     console = Console()
     cfg = load_config()
-    client = get_client(cfg)
-    result = discover_family(client, cfg, args.name, args.country)
+    started = time.monotonic()
+    with console.status(f'[bold cyan]Discovering family for "{args.name}"...[/bold cyan]'):
+        client = get_client(cfg)
+        result = discover_family(client, cfg, args.name, args.country)
+    elapsed = time.monotonic() - started
+
     render(console, result)
+    console.print(f"\n[dim]Fetched in {elapsed:.2f}s[/dim]")
 
 
 if __name__ == "__main__":

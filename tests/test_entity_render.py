@@ -1,4 +1,4 @@
-"""Smoke tests for er.entity.render - confirms it stays a pure presentation
+"""Smoke tests for er.cli.entity_render - confirms it stays a pure presentation
 layer (no live services, no argparse) and doesn't flood the terminal with a
 row per relationship/identifier when an entity has many of either."""
 
@@ -6,8 +6,8 @@ import io
 
 from rich.console import Console
 
+from er.cli.entity_render import render
 from er.entity.models import EntityIdentifier, EntityProfile
-from er.entity.render import render
 from er.graph.models import HierarchyResult, RelationshipEdge
 
 
@@ -52,5 +52,5 @@ def test_render_collapses_high_fanout_relationships():
     render(console, profile)
     output = buf.getvalue()
     assert "40 entities" in output
-    assert "er.hierarchy --lei LEI_A" in output
+    assert "er.cli.hierarchy --lei LEI_A" in output
     assert "Fund 39" not in output

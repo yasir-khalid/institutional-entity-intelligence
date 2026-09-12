@@ -18,16 +18,17 @@ No pydantic raw->cleaned validation boundary here, unlike a source's own
 ingest.py: this layer is built entirely from already-validated processed/
 crosswalk tables (each of which enforced its own raw->cleaned boundary already),
 not from raw external data - there's nothing new to validate, only to join.
+
+CLI entry point: `python -m er.cli.build_entities` (or `make build-entities`).
 """
 
 from __future__ import annotations
 
 import logging
-import time
 
 import duckdb
 
-from er.config import AppConfig, load_config
+from er.config import AppConfig
 from er.entity.sources import IDENTIFIER_SOURCES
 
 logger = logging.getLogger(__name__)
@@ -74,19 +75,11 @@ def build_identifiers(cfg: AppConfig) -> int:
     return n
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
-    started = time.monotonic()
-    n_entities = build_entities(cfg)
-    n_identifiers = build_identifiers(cfg)
-    logger.info(
-        "entity layer built: %d entities, %d identifiers (%.0fs)",
-        n_entities,
-        n_identifiers,
-        time.monotonic() - started,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def run_all(cfg: AppConfig) -> dict[str, int]:
+    """Runs the full canonical-entity-layer build. Pure orchestration, no
+    logging setup/CLI concerns - see er.cli.build_entities for the
+    command-line entry point that calls this and times it."""
+    return {
+        "entities": build_entities(cfg),
+        "identifiers": build_identifiers(cfg),
+    }

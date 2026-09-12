@@ -11,7 +11,7 @@ Two output tables:
   - sec_13f_filings.parquet  (SUBMISSION + COVERPAGE joined on ACCESSION_NUMBER)
   - sec_13f_holdings.parquet (INFOTABLE, one row per reported security position)
 
-Entry point: `python -m er.datasources.sec_13f.ingest` (or `make ingest-sec-13f`).
+CLI entry point: `python -m er.cli.ingest_sec_13f` (or `make ingest-sec-13f`).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import duckdb
 
-from er.config import AppConfig, load_config
+from er.config import AppConfig
 from er.datasources.common.parquet_writer import BatchedParquetWriter
 from er.datasources.sec_13f.models import Sec13FFiling, Sec13FHolding
 from er.datasources.sec_13f.schema import FILING_SCHEMA, HOLDING_SCHEMA
@@ -198,15 +198,13 @@ def _find_zip(cfg: AppConfig) -> Path:
     return matches[-1]
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
+def run_all(cfg: AppConfig) -> dict[str, int]:
+    """Finds the latest downloaded 13F bulk zip and parses both its tables. Pure
+    orchestration, no logging setup/CLI concerns - see er.cli.ingest_sec_13f for
+    the command-line entry point."""
     zip_path = _find_zip(cfg)
     logger.info("using %s", zip_path)
-    n_filings = parse_filings(cfg, zip_path)
-    n_holdings = parse_holdings(cfg, zip_path)
-    logger.info("ingestion complete: %d filings, %d holdings", n_filings, n_holdings)
-
-
-if __name__ == "__main__":
-    main()
+    return {
+        "filings": parse_filings(cfg, zip_path),
+        "holdings": parse_holdings(cfg, zip_path),
+    }

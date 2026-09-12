@@ -3,6 +3,9 @@
 Elasticsearch is used only for candidate retrieval, never as the system of record -
 the canonical data lives in Parquet (see er.datasources.gleif.ingest). This module builds a
 deliberately narrow retrieval projection: only the fields candidate search needs.
+
+CLI entry point: `python -m er.cli.index` (or `make index`) - see er/cli/ for
+argument parsing; this module has no CLI concerns itself.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import time
 import pyarrow.parquet as pq
 from opensearchpy import OpenSearch, helpers
 
-from er.config import AppConfig, load_config
+from er.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -148,23 +151,3 @@ def bulk_load(client: OpenSearch, cfg: AppConfig) -> int:
     return total
 
 
-def main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Create/bulk-load the GLEIF OpenSearch index")
-    parser.add_argument(
-        "--recreate", action="store_true", help="drop and recreate the index first (needed after a mapping change)"
-    )
-    args = parser.parse_args()
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    cfg = load_config()
-    client = get_client(cfg)
-    create_index(client, cfg, recreate=args.recreate)
-    bulk_load(client, cfg)
-    stats = client.cat.indices(index=cfg.opensearch.index_name, format="json")
-    logger.info("index stats: %s", stats)
-
-
-if __name__ == "__main__":
-    main()
