@@ -47,3 +47,8 @@ matching:
     auto_match_min_gap: 30
     review_min_score: 90
     tie_tolerance: 5
+
+# Brand/family discovery tuning (er.family) - a different operation from matching:
+# retrieves and groups a SET of related legal entities rather than resolving to one.
+family:
+  candidate_pool_size: 100

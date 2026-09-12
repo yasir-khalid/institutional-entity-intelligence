@@ -80,12 +80,17 @@ class MatchingConfig(BaseModel):
     decision: MatchingDecisionThresholds = MatchingDecisionThresholds()
 
 
+class FamilyConfig(BaseModel):
+    candidate_pool_size: int = 100
+
+
 class AppConfig(BaseModel):
     gleif: GleifConfig
     opensearch: OpenSearchConfig
     search: SearchConfig
     benchmark: BenchmarkConfig
     matching: MatchingConfig = MatchingConfig()
+    family: FamilyConfig = FamilyConfig()
 
     @property
     def opensearch_url(self) -> str:

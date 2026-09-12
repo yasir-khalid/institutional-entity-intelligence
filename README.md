@@ -24,7 +24,7 @@ uv run python -m er.validation              # sanity-check the processed tables
 uv run python -m er.benchmark.generate      # data/benchmark/*.parquet (~1 sec, DuckDB)
 ```
 
-**Day-to-day usage** — three CLIs, from simplest to richest. All three accept
+**Day-to-day usage** — four CLIs, from simplest to richest. The first three accept
 `--country` (ISO alpha-2 *or* a common alias: `UK`, `United Kingdom`, `USA`,
 `Cayman Islands`, ... — see `COUNTRY_ALIASES` in
 `er/normalisation/countries.py`) and `--country-mode soft|strict`
@@ -48,6 +48,11 @@ uv run python -m er.match --name "North Rock Capital" --country GB
 #    neighbor's own relationships (e.g. shows the "grandparent" too).
 uv run python -m er.hierarchy --name "Albacore Partners I Master Fund" --country IE
 uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16 --direction parents --depth 2
+
+# 4. Brand/family discovery - a DIFFERENT question from er.match. Not "which one
+#    entity?" but "which SET of legal entities make up this institution?" Never
+#    forces a single winner - groups results by confidence and role instead.
+uv run python -m er.family --name "Point72"
 ```
 
 **Testing** — two levels, run both after any change to retrieval/scoring/decision logic:
@@ -537,3 +542,79 @@ Before this, getting the "grandparent" required a second, separate CLI call with
 the parent's own LEI - depth now does that automatically, with real production
 data confirming both the cycle guard and the node budget matter (Mitsubishi UFJ's
 96-subsidiary fan-out is exactly the kind of hub node the budget exists for).
+
+## Phase 7: brand/family discovery (`er.family`)
+
+`er.match` answers "which ONE legal entity is this?" — and correctly abstains when
+a query is a brand rather than a legal name ("Point72" alone genuinely can't
+resolve to one of Point72's 15+ legal entities). `er.family` answers the actually
+different question: "which SET of legal entities make up this institution?" It's a
+separate operation, not a fuzzier version of matching - it never forces a single
+winner.
+
+```
+src/er/family/
+├── brand.py      # pure: extract_brand_core(), classify_tier(), guess_role()
+├── models.py     # FamilyMember / RelationshipEvidence / FamilyResult
+├── discover.py   # orchestrator - the only file touching OpenSearch/DuckDB
+└── __main__.py   # CLI (python -m er.family)
+```
+
+**Brand-core extraction**, validated against real GLEIF data before being written:
+strips legal-form suffixes (reusing `strip_legal_suffix`) *and*, iteratively,
+generic business words (capital, management, partners, fund, ...) and location
+qualifiers (uk, hk, singapore, hong, kong, london, ...) from the tail — so
+"Point72 Hong Kong Limited," "Point72 Japan Limited," and "Point72 Asset
+Management, L.P." all collapse to `"point72"`, while real sub-brands that add a
+distinguishing word (Point72 Credit, Point72 Lending) correctly do **not** collapse
+away, and near-miss lookalikes (North Park Rock, North Wall Capital, Rolling Rock
+Capital) correctly never match "north rock" at all — no fuzzy threshold needed,
+just an exact-or-prefix rule on the extracted core.
+
+One real bug found and fixed **before** this shipped: the iterative strip could
+hollow a brand name out to `""` when the brand's own name is entirely
+generic-sounding words ("Capital Group" → `""`, unusable). Fixed with a guard that
+never strips the last remaining token — `"Capital Group"` now correctly extracts
+to `"capital"` rather than nothing.
+
+**On library research** (asked directly whether an existing library should replace
+this): evaluated `cleanco` (legal-suffix stripping - functionally overlaps with
+`strip_legal_suffix`, already built and tested across the whole pipeline) and
+`CleanCorp` (attempts brand-root extraction, but unproven and not something to let
+"dictate final brand IDs," by the same reasoning that led to writing this from
+scratch). Neither solves the actual hard part - deciding that "capital management"
+is noise while "credit" is a meaningful sub-brand is a domain judgment call, not
+string cleanup, and the GLEIF-relationship-evidence layer (below) has no equivalent
+in any generic library at all. Kept the custom parser.
+
+**Graph evidence confirms, it doesn't discover.** After the lexical pool is
+retrieved and classified, a new `fetch_relationships_among()`
+(`er/graph/edges.py`) checks for GLEIF relationship edges *within* that pool only
+- never used to expand the search itself, since that would pull in e.g. all 96
+subsidiaries of a shared banking parent (seen in Phase 6) under any brand whose
+manager happens to sit inside a large group.
+
+### Run
+
+```bash
+uv run python -m er.family --name "Point72"
+uv run python -m er.family --name "North Rock Capital"
+```
+
+Real output for Point72: 15 HIGH-confidence entities across 7 jurisdictions (US,
+GB, HK, KY, AE, SG + more), 20 POSSIBLE sub-brands (Credit, Lending, Ventures,
+Strategies, Global Macro, ...), many graph-confirmed, plus 20 concrete relationship
+edges shown as evidence (e.g. Point72 Credit is directly/ultimately consolidated by
+Point72 Lending Corp). For North Rock Capital: all 5 "NORTH ROCK CAPITAL
+MANAGEMENT (...)" variants + the fund vehicle grouped HIGH; SPC/GP/digital-strategy
+entities grouped POSSIBLE; North Park Rock, North Wall Capital, Rolling Rock
+Capital, and Cedar Rock Capital - the deliberately-similar-but-unrelated
+distractors - correctly absent from both.
+
+Out of scope still: a richer structured name parser (separate `legal_form`/
+`geography`/`role_terms`/`brand_tokens` fields rather than one collapsed
+`brand_core` string) would handle more edge cases correctly, but the flat-string
+approach already passes every real example tested, including the adversarial ones
+- revisit only if a concrete new example actually breaks it. Also still open: the
+`datasources/<source>/` restructuring and SEC Form ADV ingestion the user requested
+alongside this feature - separate, larger efforts, sequenced next.

@@ -33,6 +33,39 @@ def fetch_relationships(cfg: AppConfig, lei: str) -> list[dict]:
     ]
 
 
+def fetch_relationships_among(cfg: AppConfig, leis: list[str]) -> list[dict]:
+    """Active relationship edges where BOTH ends are in `leis` - used to confirm
+    family membership within an already-retrieved candidate pool (er.family), not
+    to discover new members. See er/family/discover.py for why: expanding via
+    relationships alone would pull in e.g. all 96 subsidiaries of a shared banking
+    parent, most of which have nothing to do with the queried brand.
+    """
+    if len(leis) < 2:
+        return []
+    path = cfg.gleif.processed_dir / "gleif_relationships.parquet"
+    con = duckdb.connect()
+    placeholders = ", ".join("?" for _ in leis)
+    rows = con.execute(
+        f"""
+        SELECT start_node_id, end_node_id, relationship_type, relationship_status
+        FROM read_parquet('{path}')
+        WHERE start_node_id IN ({placeholders}) AND end_node_id IN ({placeholders})
+          AND relationship_status != 'INACTIVE'
+        """,
+        [*leis, *leis],
+    ).fetchall()
+    con.close()
+    return [
+        {
+            "start_node_id": r[0],
+            "end_node_id": r[1],
+            "relationship_type": r[2],
+            "relationship_status": r[3],
+        }
+        for r in rows
+    ]
+
+
 def fetch_exceptions(cfg: AppConfig, lei: str) -> list[dict]:
     path = cfg.gleif.processed_dir / "gleif_relationship_exceptions.parquet"
     con = duckdb.connect()

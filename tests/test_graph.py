@@ -4,6 +4,7 @@ import pytest
 
 from er.config import AppConfig, BenchmarkConfig, GleifConfig, OpenSearchConfig, SearchConfig
 from er.graph.build import build_hierarchy, build_hierarchy_tree
+from er.graph.edges import fetch_relationships_among
 
 
 @pytest.fixture
@@ -296,3 +297,38 @@ def test_direction_children_only_expands_downward(cfg):
     assert root.upward == []
     assert len(root.downward) == 1
     assert root.downward[0].lei == "LEI_C"
+
+
+# --- fetch_relationships_among (er.family's graph-confirmation query) ----------
+
+
+def test_fetch_relationships_among_only_returns_edges_within_the_pool(cfg):
+    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
+    _write_relationships(
+        cfg,
+        [
+            _rel("LEI_A", "LEI_B", "IS_FUND-MANAGED_BY"),  # both in pool - should be returned
+            _rel("LEI_A", "LEI_C", "IS_FUND-MANAGED_BY"),  # LEI_C not in pool - should be excluded
+        ],
+    )
+    _write_exceptions(cfg, [])
+
+    edges = fetch_relationships_among(cfg, ["LEI_A", "LEI_B"])
+
+    assert len(edges) == 1
+    assert edges[0]["start_node_id"] == "LEI_A"
+    assert edges[0]["end_node_id"] == "LEI_B"
+
+
+def test_fetch_relationships_among_excludes_inactive(cfg):
+    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B")])
+    _write_relationships(cfg, [_rel("LEI_A", "LEI_B", "IS_FUND-MANAGED_BY", status="INACTIVE")])
+    _write_exceptions(cfg, [])
+
+    assert fetch_relationships_among(cfg, ["LEI_A", "LEI_B"]) == []
+
+
+def test_fetch_relationships_among_single_lei_returns_empty():
+    # No config needed - a pool of <2 LEIs can't have an intra-pool edge, and the
+    # function should short-circuit before ever querying.
+    assert fetch_relationships_among(None, ["LEI_A"]) == []
