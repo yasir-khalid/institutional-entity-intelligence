@@ -1,38 +1,35 @@
 "use client";
 
 import type { EntityDetail } from "@/lib/api";
+import { Bar } from "@/components/Skeletons";
 
 function formatUsd(value: number | null): string {
   if (value === null) return "-";
   return `$${value.toLocaleString()}`;
 }
 
-function SkeletonBar({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded bg-slate-200 ${className}`} />;
-}
-
 function DetailsSkeleton() {
   return (
     <div className="flex flex-col gap-4 p-4">
       <div>
-        <SkeletonBar className="mb-2 h-5 w-3/4" />
-        <SkeletonBar className="h-3 w-1/3" />
+        <Bar className="mb-2 h-5 w-3/4" />
+        <Bar className="h-3 w-1/3" />
       </div>
       <div className="grid grid-cols-2 gap-2">
         {Array.from({ length: 6 }).map((_, i) => (
-          <SkeletonBar key={i} className="h-4 w-full" />
+          <Bar key={i} className="h-4 w-full" />
         ))}
       </div>
       <div>
-        <SkeletonBar className="mb-2 h-4 w-24" />
+        <Bar className="mb-2 h-4 w-24" />
         {Array.from({ length: 3 }).map((_, i) => (
-          <SkeletonBar key={i} className="mb-1 h-4 w-full" />
+          <Bar key={i} className="mb-1 h-4 w-full" />
         ))}
       </div>
       <div>
-        <SkeletonBar className="mb-2 h-4 w-32" />
+        <Bar className="mb-2 h-4 w-32" />
         {Array.from({ length: 5 }).map((_, i) => (
-          <SkeletonBar key={i} className="mb-1 h-4 w-full" />
+          <Bar key={i} className="mb-1 h-4 w-full" />
         ))}
       </div>
     </div>

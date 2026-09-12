@@ -162,11 +162,31 @@ def entity_tree(
     extra_parent_depth: int = Query(
         1, ge=0, le=3, description="Extra hops upward beyond depth - ownership chains are usually short and high-value to see in full."
     ),
+    max_nodes: int = Query(
+        30,
+        ge=10,
+        le=100,
+        description=(
+            "Caps how many entities get their own relationships expanded (not the total tree "
+            "size, which can still exceed this - each expansion can list many un-expanded leaf "
+            "children). This budget vs. total-node-count relationship is highly non-linear for "
+            "hub-heavy entities (confirmed live on one real entity: max_nodes=35 -> 48 total "
+            "nodes, max_nodes=40 -> 434, max_nodes=55 -> 1,111 - one extra hub expansion can "
+            "unlock a cascade), so this default is chosen to sit safely below where that specific "
+            "cascade started, not simply scaled down from build_hierarchy_tree's own CLI default "
+            "(200, fine for a single terminal render, unsafe for a DOM-per-node web tree)."
+        ),
+    ),
 ) -> TreeNode:
     if direction not in ("parents", "children", "all"):
         raise HTTPException(400, "direction must be one of parents, children, all")
     root = build_hierarchy_tree(
-        _cfg(), entity_id, depth=depth, direction=direction, extra_parent_depth=extra_parent_depth
+        _cfg(),
+        entity_id,
+        depth=depth,
+        direction=direction,
+        extra_parent_depth=extra_parent_depth,
+        max_nodes=max_nodes,
     )
     return _convert_tree(root, None)
 

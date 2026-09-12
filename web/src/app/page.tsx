@@ -3,8 +3,9 @@
 import { useCallback, useState } from "react";
 import SearchBar from "@/components/SearchBar";
 import ResultsList from "@/components/ResultsList";
-import TreeExplorer from "@/components/TreeExplorer";
+import TreeGraph from "@/components/TreeGraph";
 import DetailsPanel from "@/components/DetailsPanel";
+import { ResultsSkeleton, TreeSkeleton } from "@/components/Skeletons";
 import {
   search,
   getEntityTree,
@@ -73,15 +74,18 @@ export default function Home() {
     try {
       const resp = await search(query, searchType);
       setResults(resp.results);
+      setSearching(false);
+      // A single unambiguous result (or a confident AUTO_MATCH) jumps
+      // straight to the tree - fired after `searching` clears so the
+      // results skeleton and the tree skeleton never both show at once.
       const autoMatch = resp.results.find((r) => r.decision === "AUTO_MATCH");
       if (resp.results.length === 1) {
-        await loadTree(resp.results[0].entity_id);
+        void loadTree(resp.results[0].entity_id);
       } else if (autoMatch) {
-        await loadTree(autoMatch.entity_id);
+        void loadTree(autoMatch.entity_id);
       }
     } catch (e) {
       setSearchError(e instanceof Error ? e.message : "Search failed");
-    } finally {
       setSearching(false);
     }
   }
@@ -99,7 +103,14 @@ export default function Home() {
         {searchError && <p className="mt-2 text-sm text-red-600">{searchError}</p>}
       </header>
 
-      {showResultsPicker && (
+      {searching && (
+        <div className="max-h-56 shrink-0 overflow-y-auto border-b border-slate-200 px-6 py-3">
+          <h2 className="mb-2 text-sm font-semibold text-slate-700">Searching...</h2>
+          <ResultsSkeleton />
+        </div>
+      )}
+
+      {!searching && showResultsPicker && (
         // max-h + overflow-y-auto is load-bearing, not cosmetic: without a
         // cap, a result set with many rows (e.g. a brand name like "Point72"
         // returning 10+ legal entities) grows unbounded and can squeeze the
@@ -118,16 +129,23 @@ export default function Home() {
           {rootEntityId ? (
             <>
               <h2 className="mb-2 shrink-0 text-sm font-semibold text-slate-700">
-                Relationship tree (depth {TREE_DEPTH}) - click any entity for details. The searched entity is
-                marked <span className="rounded bg-blue-600 px-1 py-0.5 text-[10px] font-semibold text-white">QUERY</span>;
-                the selected one is highlighted.
+                Relationship tree (depth {TREE_DEPTH}) - drag to pan, scroll to zoom, click a card for details,
+                use the ± toggle to collapse a branch.
               </h2>
-              {treeLoading && <p className="text-sm text-slate-400">Loading tree...</p>}
               {treeError && <p className="text-sm text-red-600">{treeError}</p>}
-              {treeData && (
-                <div className="min-h-0 flex-1">
-                  <TreeExplorer data={treeData} selectedEntityId={selectedEntityId} onSelect={loadEntity} />
-                </div>
+              {treeLoading ? (
+                <TreeSkeleton />
+              ) : (
+                treeData && (
+                  <div className="min-h-0 flex-1">
+                    <TreeGraph
+                      key={rootEntityId}
+                      data={treeData}
+                      selectedEntityId={selectedEntityId}
+                      onSelect={loadEntity}
+                    />
+                  </div>
+                )
               )}
             </>
           ) : (
