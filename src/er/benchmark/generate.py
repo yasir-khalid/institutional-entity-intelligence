@@ -134,21 +134,44 @@ def generate_hard_negatives(cfg: AppConfig) -> Path:
                 FROM filtered
                 GROUP BY aggressive_core
                 HAVING COUNT(*) BETWEEN 2 AND {max_group}
+            ),
+            -- An aggressive_core query is only a genuinely adversarial "which of
+            -- these two same-numbered/structured funds is this?" case if that exact
+            -- stripped string ISN'T also the real, un-suffixed legal_name_core of some
+            -- THIRD, unrelated entity - e.g. stripping "III" from "HVB FUNDING TRUST
+            -- III" produces "hvb funding trust", which collides with a real, distinct
+            -- "HVB FUNDING TRUST" entity that has no numeral at all. In that case the
+            -- literal correct answer to the stripped query IS the third entity (a
+            -- legitimate name_core_exact match), not lei_a - so the pair's label would
+            -- be wrong, not the matcher. Confirmed live: every one of a sample of
+            -- fund_number AUTO_MATCH "failures" was exactly this pattern (see
+            -- experiments/004). Excluding these keeps every remaining confusable_pair
+            -- row a fair test: nothing outside {{lei_a, lei_b}} legitimately answers it.
+            pairs AS (
+                SELECT
+                    a.lei AS lei_a, b.lei AS lei_b, a.aggressive_core, a.jurisdiction,
+                    a.fund_number AS fund_number_a, b.fund_number AS fund_number_b,
+                    a.is_master AS is_master_a, a.is_feeder AS is_feeder_a,
+                    b.is_master AS is_master_b, b.is_feeder AS is_feeder_b,
+                    CASE
+                        WHEN a.fund_number IS NOT NULL AND b.fund_number IS NOT NULL
+                             AND a.fund_number != b.fund_number THEN 'fund_number'
+                        WHEN a.is_master != b.is_master OR a.is_feeder != b.is_feeder THEN 'master_feeder'
+                        ELSE 'other_same_core'
+                    END AS conflict_type
+                FROM filtered a
+                JOIN filtered b ON a.aggressive_core = b.aggressive_core AND a.lei < b.lei
+                JOIN group_sizes g ON a.aggressive_core = g.aggressive_core
             )
-            SELECT
-                a.lei AS lei_a, b.lei AS lei_b, a.aggressive_core, a.jurisdiction,
-                a.fund_number AS fund_number_a, b.fund_number AS fund_number_b,
-                a.is_master AS is_master_a, a.is_feeder AS is_feeder_a,
-                b.is_master AS is_master_b, b.is_feeder AS is_feeder_b,
-                CASE
-                    WHEN a.fund_number IS NOT NULL AND b.fund_number IS NOT NULL
-                         AND a.fund_number != b.fund_number THEN 'fund_number'
-                    WHEN a.is_master != b.is_master OR a.is_feeder != b.is_feeder THEN 'master_feeder'
-                    ELSE 'other_same_core'
-                END AS conflict_type
-            FROM filtered a
-            JOIN filtered b ON a.aggressive_core = b.aggressive_core AND a.lei < b.lei
-            JOIN group_sizes g ON a.aggressive_core = g.aggressive_core
+            SELECT p.*
+            FROM pairs p
+            -- Excludes lei_a/lei_b themselves from the collision check (both are
+            -- already legitimate members of this pair, not third-party collisions).
+            WHERE NOT EXISTS (
+                SELECT 1 FROM candidates x
+                WHERE x.legal_name_core = p.aggressive_core
+                  AND x.lei NOT IN (p.lei_a, p.lei_b)
+            )
         ) TO '{out_path}' (FORMAT PARQUET)
     """)
     (row_count,) = con.sql(f"SELECT COUNT(*) FROM read_parquet('{out_path}')").fetchone()

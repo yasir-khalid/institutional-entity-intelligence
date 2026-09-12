@@ -373,7 +373,8 @@ GLEIF LEI by calling `er.matching.matcher.match()` unchanged - a 13F filer name 
 exactly the same "which single legal entity is this?" question the matcher
 already answers for any source.
 
-Real run against 10,672 unique 13F filers (one quarterly bulk file, 2026-Q1):
+Real run against 10,672 unique 13F filers (one quarterly bulk file, 2026-Q1),
+before the fixes below:
 3,255 AUTO_MATCH, 845 REVIEW, 6,572 UNMATCHED - e.g. "ADVANCED MICRO DEVICES INC"
 and "American Airlines Group Inc." both resolved correctly with wide score gaps
 (151 and 134 points respectively). The large UNMATCHED share is expected and
@@ -385,10 +386,82 @@ all, only a name and a US state/country, which real, thorough resolution
 correctly treats with less confidence than a name+address+ID match would earn.
 
 `er.evaluation.run_benchmark`'s new `by_conflict_type` breakdown (added in this
-same phase to make experiment 003 measurable) surfaced an adjacent, more
-concerning finding on the existing GLEIF benchmark: the `fund_number` confusable-
-pair slice has **0% AUTO_MATCH precision** in the 6,000-row sample (37 confident
-AUTO_MATCHes, all wrong) - a bigger dangerous-failure source than the
-master/feeder case this phase fixed, and a clear next target. See
-[`experiments/003`](../experiments/003-fix-master-feeder-conflict-false-positive.md)
-for the full numbers.
+same phase to make experiment 003 measurable) surfaced an adjacent finding: the
+`fund_number` confusable-pair slice showed 0% AUTO_MATCH precision. Direct
+reproduction showed this was a **benchmark labeling artifact** (a stripped
+adversarial query coincidentally exact-matched a real, unrelated third GLEIF
+entity), not a matcher bug - fixed by adding a collision guard to
+`generate_hard_negatives()` (experiment 004). A second, genuinely real bug
+surfaced on the `master_feeder` slice instead: `name_core_exact` inherently
+favors the master/plain-name variant over the feeder whenever the query omits
+the qualifier, since the feeder's own name has an extra token that can never
+exact-match. Fixed with `_fund_structure_ambiguous()` in
+`er.matching.matcher` (experiment 005) - refuses AUTO_MATCH when the query
+asserts no master/feeder claim and the top-2 candidates disagree on structure,
+regardless of score gap. Net effect on `master_feeder`:
+**dangerous-failure rate 26.1% -> 0.0%**, AUTO_MATCH precision **53.9% -> 100%**.
+See [`experiments/004`](../experiments/004-benchmark-collision-artifact-not-a-matcher-bug.md)
+and [`experiments/005`](../experiments/005-fund-structure-ambiguity-guard.md) for the full numbers.
+
+## Phase 11: canonical entity layer (`er.entity`) and an extensible identifier-source registry
+
+Until this phase, GLEIF-anchored entity resolution (`er.match`/`er.hierarchy`/
+`er.family`) and SEC 13F data (ingestion + crosswalk) were two parallel systems
+joined only by hand-written DuckDB SQL - a real gap, since the actual product
+value is one canonical entity carrying facts from every source, not two
+datasets a user has to join themselves.
+
+```
+src/er/entity/
+├── models.py     # CanonicalEntity fields, EntityIdentifier, Sec13FActivity,
+│                   EntityProfile - the one request-level view
+├── sources.py    # THE extension point: one SQL-returning function per source,
+│                   registered in IDENTIFIER_SOURCES - see below
+├── build.py      # entities.parquet (seeded 1:1 from GLEIF) + entity_identifiers.parquet
+│                   (every registered source's identifiers, UNIONed via DuckDB)
+├── profile.py    # get_entity_profile(): identity + identifiers + GLEIF
+│                   relationships (reuses er.graph.build.build_hierarchy
+│                   unchanged) + SEC 13F activity summary
+└── __main__.py   # CLI (python -m er.entity --name "..." / --lei ...)
+```
+
+**Extensibility was the explicit design goal, not an afterthought.** Adding a
+new source's identifiers to every entity profile going forward means writing
+ONE function in `er/entity/sources.py` - a SQL SELECT over that source's own
+crosswalk output, aliased to five fixed columns - and appending it to
+`IDENTIFIER_SOURCES`. No source function loads rows into Python; `build.py`
+UNIONs every query and writes the result in one DuckDB `COPY`, so a
+future-onboarded source with millions of rows costs nothing extra to wire in.
+A source function returns `None` when its upstream data doesn't exist yet
+(e.g. a fresh checkout that hasn't run a crosswalk), so the entity layer
+degrades gracefully rather than failing. Two sources are wired in from day
+one to prove the pattern: GLEIF's own ISIN↔LEI bridge (9.27M rows, sitting
+unused since Phase 2) and the SEC 13F crosswalk.
+
+**`er.entity`'s output is deliberately careful about what SEC 13F data means.**
+It always labels holdings "latest SEC 13F reported holdings," never "holdings"
+or "portfolio" unqualified - 13F excludes shorts, derivatives, non-US
+securities, private investments, and sub-threshold positions, and showing it
+unqualified would misrepresent a partial disclosure as a complete picture.
+
+### Run
+
+```bash
+make build-entities
+uv run python -m er.entity --name "Fred Alger Management" --country US
+uv run python -m er.entity --lei R2I72C950HOYXII45366   # AMD - files 13F on its own treasury holdings
+```
+
+Real output for AMD's own LEI: identity + 912 ISINs (collapsed to a sample in
+the CLI table) + a resolved SEC CIK + its GLEIF subsidiary/parent relationships
+(AMD India, Xilinx Holding entities) + its own latest 13F filing (period
+2026-Q1, 4 securities reported, largest being Sanmina Corp) - one profile
+spanning both sources, exactly the fork-in-the-road integration this phase
+targeted rather than a separate, disconnected `er.holdings` command.
+
+Out of scope still, per explicit design discussion: historical/multi-quarter
+13F ingestion (only one quarter is loaded, so no quarter-over-quarter position
+change analysis is possible yet), a dedicated crosswalk-precision evaluation
+harness (distinct from the general GLEIF benchmark), and Form ADV/FCA/Companies
+House as additional sources (the registry pattern above is what makes each of
+those a small, additive change whenever undertaken).

@@ -2,7 +2,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from er.config import AppConfig, BenchmarkConfig, GleifConfig, OpenSearchConfig, SearchConfig, Sec13FConfig
+from er.config import (
+    AppConfig,
+    BenchmarkConfig,
+    EntityConfig,
+    GleifConfig,
+    OpenSearchConfig,
+    SearchConfig,
+    Sec13FConfig,
+)
 from er.graph.build import build_hierarchy, build_hierarchy_tree
 from er.graph.edges import fetch_relationships_among
 
@@ -23,6 +31,7 @@ def cfg(tmp_path):
             isin_lei_zip="i.zip",
         ),
         sec_13f=Sec13FConfig(raw_dir=tmp_path / "sec_13f_raw", processed_dir=processed),
+        entity=EntityConfig(processed_dir=processed),
         opensearch=OpenSearchConfig(index_name="test"),
         search=SearchConfig(),
         benchmark=BenchmarkConfig(output_dir=benchmark_dir),

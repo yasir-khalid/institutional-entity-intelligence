@@ -41,3 +41,5 @@ Kept or reverted, and why. If INVALIDATED, what to try instead (if anything come
 | [001](001-compact-name-field-for-glued-queries.md) | Compact (space-stripped) keyword field for glued/no-space name queries | VALIDATED | Medium-tier recall (~55%) |
 | [002](002-failure-analysis-categorization.md) | Categorize evaluation failures instead of just aggregate precision/recall | VALIDATED | Failure-analysis categorization |
 | [003](003-fix-master-feeder-conflict-false-positive.md) | Fix master/feeder conflict false-positive on ambiguous queries | VALIDATED | Confusable-pair dangerous-failure rate |
+| [004](004-benchmark-collision-artifact-not-a-matcher-bug.md) | "0% precision on fund_number pairs" was a benchmark labeling artifact | VALIDATED (benchmark fix) | Confusable-pair dangerous-failure rate |
+| [005](005-fund-structure-ambiguity-guard.md) | Refuse AUTO_MATCH when query is master/feeder-silent and top-2 disagree | VALIDATED | Confusable-pair dangerous-failure rate |

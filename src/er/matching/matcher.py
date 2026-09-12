@@ -60,6 +60,35 @@ def _build_reason(
     return reason, []
 
 
+def _fund_structure_ambiguous(
+    query: dict, top: CandidateScore, runner_up: CandidateScore | None, raw_by_lei: dict
+) -> bool:
+    """True when the query makes no master/feeder claim of its own, yet the top
+    two candidates disagree on master/feeder status.
+
+    This catches a real scoring asymmetry `master_conflict`/`feeder_conflict`
+    (see experiments/003) doesn't: `name_core_exact` inherently favors whichever
+    candidate's OWN legal_name_core has no extra "feeder"/"master" token to strip
+    - a query that omits the qualifier string-matches the plain/master variant's
+    core exactly, while the feeder variant's core still carries "feeder" and only
+    earns a lower name_ratio score. That produces a large, confident-looking
+    score gap that reflects incidental tokenization, not real evidence
+    distinguishing the two - confirmed live (experiments/005): every sampled
+    master_feeder dangerous failure was exactly this pattern, never a
+    genuinely-wrong retrieval. When true, the caller should refuse to
+    AUTO_MATCH regardless of the score gap.
+    """
+    if runner_up is None:
+        return False
+    if query.get("is_master") or query.get("is_feeder"):
+        return False  # query itself asserts a claim - not ambiguous, let scoring decide
+    top_raw = raw_by_lei.get(top.lei, {})
+    other_raw = raw_by_lei.get(runner_up.lei, {})
+    top_struct = (bool(top_raw.get("is_master")), bool(top_raw.get("is_feeder")))
+    other_struct = (bool(other_raw.get("is_master")), bool(other_raw.get("is_feeder")))
+    return top_struct != other_struct
+
+
 def match(
     client: OpenSearch,
     cfg: AppConfig,
@@ -98,6 +127,13 @@ def match(
         c.rank = i + 1
 
     decision, chosen, gap = decide(scored, cfg.matching.decision)
+
+    if decision == Decision.AUTO_MATCH:
+        raw_by_lei = {c["lei"]: c for c in raw_candidates}
+        runner_up = scored[1] if len(scored) > 1 else None
+        if _fund_structure_ambiguous(query, scored[0], runner_up, raw_by_lei):
+            decision = Decision.REVIEW
+
     reason, competing = _build_reason(decision, scored, cfg.matching.decision)
 
     return MatchResult(

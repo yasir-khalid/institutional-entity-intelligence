@@ -3,7 +3,15 @@ import pyarrow.parquet as pq
 import pytest
 
 from er.benchmark.generate import _name_variant, _seed_fraction, generate_hard_negatives, generate_positives
-from er.config import AppConfig, BenchmarkConfig, GleifConfig, OpenSearchConfig, SearchConfig, Sec13FConfig
+from er.config import (
+    AppConfig,
+    BenchmarkConfig,
+    EntityConfig,
+    GleifConfig,
+    OpenSearchConfig,
+    SearchConfig,
+    Sec13FConfig,
+)
 
 ENTITY_COLUMNS = [
     "lei",
@@ -50,6 +58,7 @@ def cfg(tmp_path):
             isin_lei_zip="i.zip",
         ),
         sec_13f=Sec13FConfig(raw_dir=tmp_path / "sec_13f_raw", processed_dir=processed),
+        entity=EntityConfig(processed_dir=processed),
         opensearch=OpenSearchConfig(index_name="test"),
         search=SearchConfig(),
         benchmark=BenchmarkConfig(output_dir=benchmark_dir, seed=42, eval_sample_size=100, min_core_tokens=3),

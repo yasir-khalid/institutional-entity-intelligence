@@ -12,14 +12,16 @@ canonical data always lives in Parquet.
 ## How it works
 
 ```mermaid
-flowchart LR
-    subgraph sources["Data sources"]
+flowchart TB
+    subgraph sources["Data sources (each owns its own ETL)"]
         GLEIF["GLEIF LEI data\n(3.4M entities)"]
         SEC13F["SEC Form 13F\n(institutional filings)"]
+        FUTURE["... next source\n(FCA, Companies House, Form ADV)"]
     end
 
     GLEIF --> ingest["Ingest\n(streaming parse -> Parquet)"]
     SEC13F --> ingest
+    FUTURE -.-> ingest
 
     ingest --> parquet[("Parquet\nsystem of record")]
     parquet --> index["OpenSearch index\n(candidate retrieval only)"]
@@ -29,16 +31,27 @@ flowchart LR
     retrieve --> score["Score\nexplainable features"]
     score --> decide["Decide\nAUTO_MATCH / REVIEW / UNMATCHED"]
 
-    parquet --> crosswalk["Crosswalk\n(13F filer -> GLEIF LEI)"]
-    decide --> crosswalk
+    decide --> crosswalk["Crosswalk\n(source record -> GLEIF LEI)"]
+    parquet --> crosswalk
 
-    decide --> hierarchy["Hierarchy / family\n(GLEIF relationships)"]
+    crosswalk --> canonical["Canonical entity layer\nentities + entity_identifiers\n(one entity, many sources)"]
+    parquet --> canonical
+
+    canonical --> profile["er.entity\none profile: identity + IDs +\nrelationships + SEC activity"]
+    canonical --> hierarchy["er.hierarchy / er.family\nGLEIF relationships"]
 ```
 
 Every decision carries an evidence trail (which features fired, retrieval score
 vs. match score, why a REVIEW/UNMATCHED wasn't confident enough) — never a silent
 black box. See [`docs/architecture.md`](docs/architecture.md) for the full
 request-level flow and [`docs/phases.md`](docs/phases.md) for the build history.
+
+**Adding a new data source** (FCA, Companies House, Form ADV, ...) never touches
+the canonical entity layer's code — you write that source's own `ingest.py`
+under `src/er/datasources/<source>/`, a crosswalk resolving its records to a
+GLEIF LEI via the existing `er.matching.matcher.match()`, and one SQL-returning
+function in `src/er/entity/sources.py` pointing at your crosswalk's output. See
+[`AGENTS.md`](AGENTS.md) for the exact steps.
 
 ## Quickstart
 
@@ -71,14 +84,19 @@ uv run python -m er.search --name "Sampo Oyj" --country FI
 # Full resolution - retrieve + score + decide, with evidence
 uv run python -m er.match --name "North Rock Capital" --country GB
 
+# The canonical entity profile - identity + every attached identifier (LEI,
+# ISIN, SEC CIK, ...) + GLEIF relationships + SEC 13F activity, all one view
+uv run python -m er.entity --name "Fred Alger Management" --country US
+
 # Relationship hierarchy - who manages it, what it's a sub-fund of
 uv run python -m er.hierarchy --name "Albacore Partners I Master Fund" --country IE --depth 2
 
 # Brand/family discovery - which SET of legal entities make up this institution
 uv run python -m er.family --name "Point72"
 
-# Crosswalk SEC 13F filers to GLEIF LEIs
+# Crosswalk SEC 13F filers to GLEIF LEIs, then rebuild the canonical entity layer
 make crosswalk-sec-13f
+make build-entities
 ```
 
 Run `make help` for the full target list. All CLIs support `--country` (ISO
@@ -111,6 +129,9 @@ src/er/
 ├── family/                 # brand/family discovery (er.family)
 ├── graph/                  # relationship hierarchy (er.hierarchy)
 ├── crosswalk/              # resolve another source's records to a GLEIF LEI
+├── entity/                 # canonical entity layer: one entity, identifiers
+│                             from every source (er.entity) - see sources.py to
+│                             add a new source's identifiers with one function
 ├── evaluation/             # benchmark scoring + failure-analysis metrics
 └── benchmark/              # auto-generated evaluation pairs
 

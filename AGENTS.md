@@ -36,6 +36,15 @@ src/er/
 ├── crosswalk/                  # resolve ANOTHER source's records to a GLEIF
 │                             LEI, by calling er.matching.matcher.match()
 │                             unchanged - never reimplement matching per source.
+├── entity/                     # canonical entity layer - entities.parquet (one
+│                             row per entity) + entity_identifiers.parquet (every
+│                             identifier any source has attached). sources.py is
+│                             THE file to touch when wiring a new source's
+│                             identifiers in - see "Adding a new data source"
+│                             below. profile.py assembles the single
+│                             request-level EntityProfile (identity + IDs +
+│                             GLEIF relationships + SEC 13F activity) that
+│                             er.entity's CLI renders.
 ├── benchmark/                  # auto-generates evaluation_pairs.parquet from
 │                             the ISIN<->LEI bridge + intra-GLEIF confusable
 │                             pairs. No manual labeling.
@@ -55,6 +64,38 @@ tests/         # mirrors src/er/ - pure functions get synthetic-fixture unit
                # tests; nothing here touches live OpenSearch (see er.evaluation
                # for that).
 ```
+
+## Adding a new data source, end to end
+
+This is the full recipe for wiring a new source (SEC Form ADV, FCA, Companies
+House, ...) into the product - every step is additive, nothing here requires
+touching another source's code or the canonical entity layer's internals:
+
+1. **Ingest** (`src/er/datasources/<source>/`): write `models.py` (pydantic
+   raw->cleaned boundary), `schema.py` (pyarrow schema), `ingest.py` (parser ->
+   `BatchedParquetWriter`). Copy the shape of `gleif/` (XML) or `sec_13f/`
+   (TSV-in-zip) depending on the source's format. Add a `Config` class in
+   `config.py` + a section in `config/dev.yaml` + a `make ingest-<source>`
+   target.
+2. **Crosswalk** (`src/er/crosswalk/<source>_to_gleif.py`): resolve each unique
+   record from the new source to a GLEIF LEI by calling
+   `er.matching.matcher.match()` unchanged - do not write new matching logic.
+   Persist `source_record_id, resolved_lei, decision, score` (see
+   `sec_13f_to_gleif.py` for the pattern). Add a `make crosswalk-<source>`
+   target.
+3. **Attach identifiers** (`src/er/entity/sources.py`): write ONE function
+   returning a SQL SELECT over your crosswalk's output, aliased to
+   `entity_id, identifier_type, identifier_value, confidence, source`, filtered
+   to non-UNMATCHED rows. Append it to `IDENTIFIER_SOURCES`. That's the entire
+   integration - `er.entity.build` and `er.entity`'s CLI need no other changes.
+4. **(Optional) Attach richer activity data to `EntityProfile`**: if the source
+   has its own "latest observation" concept worth showing on `er.entity`'s
+   profile (like `Sec13FActivity`), add a model to `src/er/entity/models.py`
+   and a loader function to `src/er/entity/profile.py` alongside
+   `_load_sec_13f_activity` - guard it the same way (return `None` when the
+   source's data isn't available for this entity, never raise).
+5. `make build-entities` to rebuild the canonical layer, then
+   `uv run python -m er.entity --lei ...` to see the new source's data appear.
 
 ## Design decisions (and why)
 
@@ -112,6 +153,25 @@ low `AUTO_MATCH` coverage rate by shrinking the gap threshold without checking
 `dangerous_failure_rate_confusable_pairs` and `failure_breakdown` in the same
 `make evaluate` run — a wrong entity picked confidently is the single worst
 failure mode this project optimizes against, worse than no match at all.
+
+**A benchmark hard-negative must be checked for third-party collisions.** Any
+strategy that mutates a real name into an adversarial query (stripping tokens,
+abbreviating) can accidentally produce a string that is also the exact, correct
+legal name of some unrelated third entity - in which case the matcher answering
+"correctly" per the literal query text gets scored as a dangerous failure
+against the wrong label (see `experiments/004` - this is exactly what looked
+like a severe `fund_number` scoring bug until direct reproduction showed it was
+a benchmark labeling artifact). Any new query-mutation strategy added to
+`er.benchmark.generate` needs the same collision guard
+(`generate_hard_negatives()`'s `NOT EXISTS` check) before its dangerous-failure
+numbers can be trusted.
+
+**SEC 13F is "latest reported holdings," never "holdings" or "portfolio"
+unqualified.** Form 13F covers only certain reportable US equity securities as
+of one quarterly date - it excludes shorts, derivatives, non-US securities,
+private investments, and positions below reporting thresholds. Any UI/CLI text
+showing 13F data (see `er.entity`'s renderer) must carry this caveat explicitly;
+don't let it read like a complete picture of an institution's holdings.
 
 ## Working on retrieval/scoring: use `experiments/`
 

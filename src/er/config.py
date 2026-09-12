@@ -29,6 +29,10 @@ class Sec13FConfig(BaseModel):
     batch_size: int = 50_000
 
 
+class EntityConfig(BaseModel):
+    processed_dir: Path
+
+
 class BenchmarkConfig(BaseModel):
     output_dir: Path
     seed: int = 42
@@ -99,6 +103,7 @@ class FamilyConfig(BaseModel):
 class AppConfig(BaseModel):
     gleif: GleifConfig
     sec_13f: Sec13FConfig
+    entity: EntityConfig
     opensearch: OpenSearchConfig
     search: SearchConfig
     benchmark: BenchmarkConfig
@@ -122,5 +127,6 @@ def load_config(path: str | Path = REPO_ROOT / "config" / "dev.yaml") -> AppConf
     raw["gleif"]["processed_dir"] = REPO_ROOT / raw["gleif"]["processed_dir"]
     raw["sec_13f"]["raw_dir"] = REPO_ROOT / raw["sec_13f"]["raw_dir"]
     raw["sec_13f"]["processed_dir"] = REPO_ROOT / raw["sec_13f"]["processed_dir"]
+    raw["entity"]["processed_dir"] = REPO_ROOT / raw["entity"]["processed_dir"]
     raw["benchmark"]["output_dir"] = REPO_ROOT / raw["benchmark"]["output_dir"]
     return AppConfig.model_validate(raw)

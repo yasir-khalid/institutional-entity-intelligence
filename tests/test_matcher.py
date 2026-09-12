@@ -1,5 +1,6 @@
 from er.config import MatchingDecisionThresholds
-from er.matching.matcher import _build_reason, _missing_evidence
+from er.matching.features import build_query_record
+from er.matching.matcher import _build_reason, _fund_structure_ambiguous, _missing_evidence
 from er.matching.models import CandidateScore, Decision
 
 THRESHOLDS = MatchingDecisionThresholds(
@@ -64,3 +65,49 @@ def test_missing_evidence_omits_provided_fields():
     query = {"country": "GB", "postcode": None, "registration_id": "12345"}
     missing = _missing_evidence(query)
     assert missing == ["postcode/address"]
+
+
+def test_fund_structure_ambiguous_when_query_silent_and_top_two_disagree():
+    # Regression test / experiment 005: a query lacking "master"/"feeder" (e.g. an
+    # aggressive-core-stripped adversarial query) string-matches the master/plain
+    # variant's own core exactly (name_core_exact fires) while the feeder variant's
+    # core still carries the extra "feeder" token and only earns name_ratio -
+    # producing a large, confident-looking score gap that reflects tokenization,
+    # not real evidence. Confirmed live this was auto-matching the WRONG (master)
+    # fund when the true answer was the feeder, with gaps of 60-240 points.
+    query = build_query_record("acme global credit fund")  # no master/feeder token
+    top = CandidateScore(lei="MASTER", legal_name="Acme Global Credit Fund", score=100, rank=1)
+    runner_up = CandidateScore(lei="FEEDER", legal_name="Acme Global Credit Feeder Fund", score=40, rank=2)
+    raw_by_lei = {
+        "MASTER": {"is_master": True, "is_feeder": False},
+        "FEEDER": {"is_master": False, "is_feeder": True},
+    }
+    assert _fund_structure_ambiguous(query, top, runner_up, raw_by_lei) is True
+
+
+def test_fund_structure_not_ambiguous_when_query_asserts_a_claim():
+    query = build_query_record("acme global credit master fund")
+    top = CandidateScore(lei="MASTER", legal_name="Acme Global Credit Master Fund", score=100, rank=1)
+    runner_up = CandidateScore(lei="FEEDER", legal_name="Acme Global Credit Feeder Fund", score=40, rank=2)
+    raw_by_lei = {
+        "MASTER": {"is_master": True, "is_feeder": False},
+        "FEEDER": {"is_master": False, "is_feeder": True},
+    }
+    assert _fund_structure_ambiguous(query, top, runner_up, raw_by_lei) is False
+
+
+def test_fund_structure_not_ambiguous_when_top_two_agree():
+    query = build_query_record("acme global credit fund")
+    top = CandidateScore(lei="A", legal_name="Acme Global Credit Fund I", score=100, rank=1)
+    runner_up = CandidateScore(lei="B", legal_name="Acme Global Credit Fund II", score=40, rank=2)
+    raw_by_lei = {
+        "A": {"is_master": False, "is_feeder": False},
+        "B": {"is_master": False, "is_feeder": False},
+    }
+    assert _fund_structure_ambiguous(query, top, runner_up, raw_by_lei) is False
+
+
+def test_fund_structure_not_ambiguous_with_no_runner_up():
+    query = build_query_record("acme global credit fund")
+    top = CandidateScore(lei="A", legal_name="Acme Global Credit Fund", score=100, rank=1)
+    assert _fund_structure_ambiguous(query, top, None, {"A": {"is_master": True}}) is False

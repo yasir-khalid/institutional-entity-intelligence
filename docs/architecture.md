@@ -78,6 +78,39 @@ confidence (HIGH/POSSIBLE) and role, using brand-core extraction plus GLEIF
 relationship edges as confirming (not discovering) evidence. See
 `src/er/family/brand.py` and `docs/phases.md` Phase 7.
 
+## Canonical entity layer
+
+`er.match`, `er.hierarchy`, and `er.family` all answer questions about GLEIF
+data specifically. `src/er/entity/` sits one level above that: it's the layer
+where GLEIF and every other onboarded source (currently SEC 13F) become facts
+about *one* canonical entity rather than two parallel systems joined by hand.
+
+```
+entities.parquet             one row per canonical entity (seeded 1:1 from
+                              GLEIF today; entity_id is a distinct column from
+                              GLEIF's own `lei` so a future source that
+                              introduces entities GLEIF doesn't know about has
+                              somewhere to attach without a schema change)
+
+entity_identifiers.parquet   every identifier any registered source has
+                              attached to an entity: (entity_id, identifier_type,
+                              identifier_value, confidence, source)
+```
+
+`src/er/entity/sources.py` is a registry of small SQL-returning functions, one
+per source, each reading that source's own crosswalk/processed table and
+UNIONed together by `er.entity.build` - adding a new source's identifiers to
+every entity profile going forward is exactly one function + one line in that
+registry (see [`AGENTS.md`](../AGENTS.md)'s "Adding a new data source").
+
+`er.entity --name "..."` (or `--lei`) is the resulting single "tell me about
+this institution" view: canonical identity, every attached identifier, the
+GLEIF relationship neighborhood, and - when the entity has been resolved as a
+SEC 13F filer via the crosswalk - its most recently reported holdings (always
+labeled "latest SEC 13F reported holdings," never "holdings" or "portfolio"
+unqualified, since 13F excludes shorts, derivatives, non-US securities, private
+investments, and sub-threshold positions).
+
 ## Data sources and crosswalks
 
 Each source under `src/er/datasources/<source>/` owns its own raw-file parsing,

@@ -12,6 +12,9 @@ sec_13f:
   processed_dir: data/processed
   batch_size: 50000
 
+entity:
+  processed_dir: data/processed
+
 opensearch:
   index_name: gleif_entities_v1
   number_of_shards: 2

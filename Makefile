@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help ingest-gleif ingest-sec-13f index validate benchmark pipeline test evaluate crosswalk-sec-13f
+.PHONY: help ingest-gleif ingest-sec-13f index validate benchmark pipeline test evaluate crosswalk-sec-13f build-entities
 
 help:
 	@echo "Institutional Entity Intelligence - available targets:"
@@ -18,6 +18,10 @@ help:
 	@echo ""
 	@echo "  Crosswalks (resolve another source's records to a GLEIF LEI, needs live OpenSearch):"
 	@echo "    make crosswalk-sec-13f  Resolve unique SEC 13F filers -> GLEIF LEI (~5-10 min, ~10.7k filers)"
+	@echo ""
+	@echo "  Canonical entity layer (one entity, identifiers from every source attached):"
+	@echo "    make build-entities  Rebuild entities.parquet + entity_identifiers.parquet"
+	@echo "                         (run after ingest + any crosswalk; add a source in er/entity/sources.py)"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    make test            Unit test suite (no live services needed, ~5s)"
@@ -62,6 +66,13 @@ pipeline: $(INGEST_TARGETS) index validate benchmark
 
 crosswalk-sec-13f:
 	uv run python -m er.crosswalk.sec_13f_to_gleif
+
+# --- Canonical entity layer ---------------------------------------------------
+# Rebuilds entities.parquet + entity_identifiers.parquet from GLEIF plus every
+# registered source in er.entity.sources (run after ingest + any crosswalk).
+
+build-entities:
+	uv run python -m er.entity.build
 
 # --- Testing ------------------------------------------------------------------
 
