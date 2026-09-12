@@ -87,12 +87,16 @@ def test_seed_fraction_within_duckdb_range():
 
 
 def test_generate_hard_negatives_detects_fund_number_conflict(cfg):
+    # Regression test for the grouping bug: legal_name_core embeds the fund number
+    # ("...fund ii" vs "...fund iii" are DIFFERENT legal_name_core strings), so
+    # grouping by legal_name_core alone could never pair these up. Only the
+    # aggressive_core (fund-number/structure-token stripped) grouping key can.
     cfg.gleif.processed_dir.mkdir(parents=True, exist_ok=True)
     _write_entities(
         cfg,
         [
-            _entity_row("LEI0000000000000001", "acme global opportunities fund", fund_number=2),
-            _entity_row("LEI0000000000000002", "acme global opportunities fund", fund_number=3),
+            _entity_row("LEI0000000000000001", "acme global opportunities fund ii", fund_number=2),
+            _entity_row("LEI0000000000000002", "acme global opportunities fund iii", fund_number=3),
         ],
     )
     out_path = generate_hard_negatives(cfg)
@@ -100,22 +104,28 @@ def test_generate_hard_negatives_detects_fund_number_conflict(cfg):
     assert table.num_rows == 1
     row = table.to_pylist()[0]
     assert row["conflict_type"] == "fund_number"
+    assert row["aggressive_core"] == "acme global opportunities fund"
     assert {row["lei_a"], row["lei_b"]} == {"LEI0000000000000001", "LEI0000000000000002"}
 
 
 def test_generate_hard_negatives_detects_master_feeder_conflict(cfg):
+    # Same class of bug: "...master fund" and "...feeder fund" are different
+    # legal_name_core strings; only aggressive_core strips "master"/"feeder" to
+    # make them groupable.
     cfg.gleif.processed_dir.mkdir(parents=True, exist_ok=True)
     _write_entities(
         cfg,
         [
-            _entity_row("LEI0000000000000001", "acme global credit fund", is_master=True),
-            _entity_row("LEI0000000000000002", "acme global credit fund", is_feeder=True),
+            _entity_row("LEI0000000000000001", "acme global credit master fund", is_master=True),
+            _entity_row("LEI0000000000000002", "acme global credit feeder fund", is_feeder=True),
         ],
     )
     out_path = generate_hard_negatives(cfg)
     table = pq.read_table(out_path)
     assert table.num_rows == 1
-    assert table.to_pylist()[0]["conflict_type"] == "master_feeder"
+    row = table.to_pylist()[0]
+    assert row["conflict_type"] == "master_feeder"
+    assert row["aggressive_core"] == "acme global credit fund"
 
 
 def test_generate_hard_negatives_skips_short_core_names(cfg):

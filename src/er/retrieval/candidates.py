@@ -35,16 +35,14 @@ def search_candidates(
     country: str | None = None,
     size: int | None = None,
 ) -> list[dict]:
+    """Returns each hit's full indexed document (see RETRIEVAL_FIELDS in
+    er.indexing.opensearch_index) plus rank/score - not just a display-friendly
+    subset - so downstream consumers (e.g. er.matching) have every field to compare
+    against without a second lookup.
+    """
     body = build_candidate_query(name, country, size or cfg.search.default_size)
     resp = client.search(index=cfg.opensearch.index_name, body=body)
     return [
-        {
-            "rank": i + 1,
-            "score": hit["_score"],
-            "lei": hit["_source"]["lei"],
-            "legal_name": hit["_source"]["legal_name"],
-            "jurisdiction": hit["_source"].get("jurisdiction"),
-            "legal_country": hit["_source"].get("legal_country"),
-        }
+        {"rank": i + 1, "score": hit["_score"], **hit["_source"]}
         for i, hit in enumerate(resp["hits"]["hits"])
     ]

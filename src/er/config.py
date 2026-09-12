@@ -42,11 +42,45 @@ class SearchConfig(BaseModel):
     default_size: int = 20
 
 
+class MatchingWeights(BaseModel):
+    name_exact: float = 100
+    name_core_exact: float = 60
+    name_ratio: float = 40
+    jurisdiction_exact: float = 25
+    country_exact: float = 15
+    postcode_exact: float = 35
+    postcode_prefix_exact: float = 15
+    city_exact: float = 10
+    fund_number_exact: float = 20
+    registration_id_exact: float = 250
+
+
+class MatchingPenalties(BaseModel):
+    fund_number_conflict: float = 100
+    master_conflict: float = 80
+    feeder_conflict: float = 80
+    registration_id_conflict: float = 250
+
+
+class MatchingDecisionThresholds(BaseModel):
+    auto_match_min_score: float = 140
+    auto_match_min_gap: float = 30
+    review_min_score: float = 90
+
+
+class MatchingConfig(BaseModel):
+    candidate_pool_size: int = 20
+    weights: MatchingWeights = MatchingWeights()
+    penalties: MatchingPenalties = MatchingPenalties()
+    decision: MatchingDecisionThresholds = MatchingDecisionThresholds()
+
+
 class AppConfig(BaseModel):
     gleif: GleifConfig
     opensearch: OpenSearchConfig
     search: SearchConfig
     benchmark: BenchmarkConfig
+    matching: MatchingConfig = MatchingConfig()
 
     @property
     def opensearch_url(self) -> str:

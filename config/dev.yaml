@@ -22,3 +22,27 @@ benchmark:
   eval_sample_size: 5000
   min_core_tokens: 3
   max_confusable_group_size: 10
+
+# Deterministic matcher tuning - change these to retune scoring without touching code.
+matching:
+  candidate_pool_size: 20
+  weights:
+    name_exact: 100
+    name_core_exact: 60
+    name_ratio: 40
+    jurisdiction_exact: 25
+    country_exact: 15
+    postcode_exact: 35
+    postcode_prefix_exact: 15
+    city_exact: 10
+    fund_number_exact: 20
+    registration_id_exact: 250
+  penalties:
+    fund_number_conflict: 100
+    master_conflict: 80
+    feeder_conflict: 80
+    registration_id_conflict: 250
+  decision:
+    auto_match_min_score: 140
+    auto_match_min_gap: 30
+    review_min_score: 90

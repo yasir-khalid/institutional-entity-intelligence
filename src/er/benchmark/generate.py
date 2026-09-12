@@ -84,6 +84,24 @@ def generate_positives(cfg: AppConfig) -> Path:
     return out_path
 
 
+# Fund-structure tokens and trailing fund-number tokens are still embedded in
+# legal_name_core (it only strips legal-form suffixes like LP/LLC) - so grouping by
+# legal_name_core alone can NEVER surface master-vs-feeder or fund-II-vs-III pairs;
+# those variants have different legal_name_core strings by construction. Strip them
+# too, via plain SQL regex (DuckDB's RE2 engine), to get a grouping key loose enough
+# to catch the adversarial cases this table exists for.
+_STRIP_STRUCTURE_TOKENS_SQL = r"regexp_replace({col}, '\b(master|feeder|offshore|domestic|umbrella)\b', '', 'g')"
+_STRIP_TRAILING_FUND_NUMBER_SQL = (
+    r"regexp_replace({col}, "
+    r"'\s(i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx|[0-9]{{1,3}})$', '')"
+)
+
+
+def _aggressive_core_sql(col: str) -> str:
+    no_structure = f"trim(regexp_replace({_STRIP_STRUCTURE_TOKENS_SQL.format(col=col)}, '\\s+', ' ', 'g'))"
+    return f"trim({_STRIP_TRAILING_FUND_NUMBER_SQL.format(col=no_structure)})"
+
+
 def generate_hard_negatives(cfg: AppConfig) -> Path:
     """Pairs of distinct entities that share a core name but differ in a way that
     should prevent a matcher from conflating them (fund number, master/feeder)."""
@@ -91,25 +109,33 @@ def generate_hard_negatives(cfg: AppConfig) -> Path:
     out_path = cfg.benchmark.output_dir / "hard_negatives.parquet"
     min_tokens = cfg.benchmark.min_core_tokens
     max_group = cfg.benchmark.max_confusable_group_size
+    aggressive_core = _aggressive_core_sql("legal_name_core")
 
     con = duckdb.connect()
     con.execute(f"""
         COPY (
             WITH candidates AS (
-                SELECT lei, legal_name_core, jurisdiction, fund_number, is_master, is_feeder
+                SELECT
+                    lei, legal_name_core, jurisdiction, fund_number, is_master, is_feeder,
+                    {aggressive_core} AS aggressive_core
                 FROM read_parquet('{entities}')
                 WHERE legal_name_core IS NOT NULL
-                  -- token count = space count + 1 (legal_name_core is single-space-joined)
-                  AND length(legal_name_core) - length(replace(legal_name_core, ' ', '')) + 1 >= {min_tokens}
+            ),
+            filtered AS (
+                SELECT *
+                FROM candidates
+                WHERE aggressive_core != ''
+                  -- token count = space count + 1 (aggressive_core is single-space-joined)
+                  AND length(aggressive_core) - length(replace(aggressive_core, ' ', '')) + 1 >= {min_tokens}
             ),
             group_sizes AS (
-                SELECT legal_name_core, COUNT(*) AS grp_size
-                FROM candidates
-                GROUP BY legal_name_core
+                SELECT aggressive_core, COUNT(*) AS grp_size
+                FROM filtered
+                GROUP BY aggressive_core
                 HAVING COUNT(*) BETWEEN 2 AND {max_group}
             )
             SELECT
-                a.lei AS lei_a, b.lei AS lei_b, a.legal_name_core, a.jurisdiction,
+                a.lei AS lei_a, b.lei AS lei_b, a.aggressive_core, a.jurisdiction,
                 a.fund_number AS fund_number_a, b.fund_number AS fund_number_b,
                 a.is_master AS is_master_a, a.is_feeder AS is_feeder_a,
                 b.is_master AS is_master_b, b.is_feeder AS is_feeder_b,
@@ -119,14 +145,17 @@ def generate_hard_negatives(cfg: AppConfig) -> Path:
                     WHEN a.is_master != b.is_master OR a.is_feeder != b.is_feeder THEN 'master_feeder'
                     ELSE 'other_same_core'
                 END AS conflict_type
-            FROM candidates a
-            JOIN candidates b ON a.legal_name_core = b.legal_name_core AND a.lei < b.lei
-            JOIN group_sizes g ON a.legal_name_core = g.legal_name_core
+            FROM filtered a
+            JOIN filtered b ON a.aggressive_core = b.aggressive_core AND a.lei < b.lei
+            JOIN group_sizes g ON a.aggressive_core = g.aggressive_core
         ) TO '{out_path}' (FORMAT PARQUET)
     """)
     (row_count,) = con.sql(f"SELECT COUNT(*) FROM read_parquet('{out_path}')").fetchone()
+    conflict_counts = con.sql(
+        f"SELECT conflict_type, COUNT(*) FROM read_parquet('{out_path}') GROUP BY 1"
+    ).fetchall()
     con.close()
-    logger.info("hard_negatives: %d confusable pairs -> %s", row_count, out_path)
+    logger.info("hard_negatives: %d confusable pairs (%s) -> %s", row_count, conflict_counts, out_path)
     return out_path
 
 
@@ -185,7 +214,7 @@ def build_evaluation_pairs(cfg: AppConfig, positives_path: Path, hard_negatives_
         pos_rows = con.sql(f"SELECT * FROM capped ORDER BY random() LIMIT {eval_size}").fetchall()
 
     neg_rows = con.sql(f"""
-        SELECT lei_a, lei_b, legal_name_core, jurisdiction
+        SELECT lei_a, lei_b, aggressive_core, jurisdiction
         FROM read_parquet('{hard_negatives_path}')
         ORDER BY random()
         LIMIT {neg_size}
@@ -209,12 +238,12 @@ def build_evaluation_pairs(cfg: AppConfig, positives_path: Path, hard_negatives_
             }
         )
 
-    for i, (lei_a, lei_b, legal_name_core, jurisdiction) in enumerate(neg_rows):
+    for i, (lei_a, lei_b, aggressive_core, jurisdiction) in enumerate(neg_rows):
         rows.append(
             {
                 "pair_id": f"neg_{i:07d}",
-                "query_name": legal_name_core,
-                "query_name_norm": normalize_name(legal_name_core),
+                "query_name": aggressive_core,
+                "query_name_norm": normalize_name(aggressive_core),
                 "query_country": jurisdiction,
                 "expected_lei": lei_a,
                 "confusable_lei": lei_b,

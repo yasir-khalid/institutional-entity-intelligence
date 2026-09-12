@@ -188,3 +188,68 @@ uv run python -m er.benchmark.generate
 Out of scope for this phase (still on the roadmap): actually scoring against
 `evaluation_pairs.parquet`, deterministic/ML match decisions, external sources
 (SEC/FCA/Companies House), relationship-graph resolution.
+
+## Phase 3: deterministic matcher + evaluation harness
+
+**Bug fixed first**: `hard_negatives` grouped entities by exact `legal_name_core`,
+but fund-structure tokens and fund numbers are *embedded in* `legal_name_core`
+(it only strips legal-form suffixes like LP/LLC) — so "...MASTER FUND II" and
+"...FEEDER FUND II" have different `legal_name_core` strings and could never land
+in the same group. The table's headline adversarial cases (fund II vs III, master
+vs feeder) were silently absent — 100% of the 30,725 rows were generic
+`other_same_core` duplicates. Fixed by grouping on a new `aggressive_core` (SQL
+regex strips structure tokens + trailing fund number before grouping); regenerated
+benchmark now has 71,070 pairs: 38,226 `other_same_core`, 30,084 `fund_number`,
+2,760 `master_feeder`.
+
+Adds a small, deliberately modular matcher — each concern is one file, and scoring
+is entirely config-driven (`matching:` in `config/dev.yaml`) so retuning it is a
+config edit, never a code change:
+
+```
+src/er/matching/
+├── features.py    # one pure function per comparison signal (name/address/conflicts)
+├── scoring.py      # weighted sum of features -> score, using config weights/penalties
+├── decisions.py    # score + gap-to-runner-up -> AUTO_MATCH / REVIEW / UNMATCHED
+├── models.py        # CandidateScore / MatchResult / Decision
+└── matcher.py        # orchestrator - the only file that calls OpenSearch
+
+src/er/evaluation/
+├── metrics.py          # pure aggregation (Recall@K, MRR, AUTO_MATCH precision, ...)
+└── run_benchmark.py    # runs the matcher over evaluation_pairs.parquet, writes a report
+```
+
+### Run
+
+```bash
+# Single query with full decision + evidence
+uv run python -m er.match --name "Albacore Partners I Master Fund" --country IE
+
+# Score the matcher against the whole benchmark (~6000 live OpenSearch queries, ~5 min)
+uv run python -m er.evaluation.run_benchmark
+```
+
+### First baseline (this snapshot)
+
+| | easy (raw name) | medium (stripped/compact name) | hard (confusable pair, ambiguous name) |
+|---|---|---|---|
+| Recall@20 | 99.9% | 54.6% | 77.5% |
+| AUTO_MATCH coverage | 96.8% | 26.5% | 10.2% |
+| AUTO_MATCH precision | 100% | 99.3% | 53.9% |
+
+Overall: Recall@20 71.1%, AUTO_MATCH precision 98.0%, **dangerous-failure rate on
+confusable pairs 2.7%** (confidently matched the *wrong* twin entity — the metric
+this design treats as mattering most). Full breakdown in
+`data/benchmark/evaluation_report.json`.
+
+Reading this: the matcher is appropriately conservative on hard cases (low
+AUTO_MATCH coverage rather than guessing), which is the right failure mode, but two
+things stand out as real next-step targets — the "medium" tier's retrieval recall
+is weak (the compact/no-space query variant likely doesn't tokenize well against
+OpenSearch's standard analyzer), and the 2.7% dangerous-failure rate on genuinely
+ambiguous confusable pairs, while small, is non-zero and worth tracking as the
+matcher evolves.
+
+Out of scope for this phase: ML-based scoring, external sources
+(SEC/FCA/Companies House), relationship-graph resolution, retrieval tuning to
+address the medium-tier recall gap above.
