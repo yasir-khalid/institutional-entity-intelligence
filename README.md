@@ -278,3 +278,57 @@ Out of scope for this phase: ML-based scoring, external sources
 (SEC/FCA/Companies House), relationship-graph resolution, retrieval tuning to
 address the medium-tier recall gap, and investigating the confusable-pair
 dangerous-failure regression noted above.
+
+## Phase 4: relationship hierarchy
+
+Resolving a name to one LEI answers "what is this," but the more interesting
+question for hedge-fund/institutional data is "what is it *part of*" — who manages
+it, what master fund it feeds into, what sits above its manager. GLEIF's
+relationship data (`gleif_relationships.parquet`, ingested in Phase 2 but unused
+until now) already has this: `IS_DIRECTLY_CONSOLIDATED_BY`,
+`IS_ULTIMATELY_CONSOLIDATED_BY`, `IS_FUND-MANAGED_BY`, `IS_SUBFUND_OF`,
+`IS_FEEDER_TO`, `IS_INTERNATIONAL_BRANCH_OF` — every edge points `start → end` as
+child → parent, and every node is a real LEI already in our entities table (no
+cross-referencing needed).
+
+```
+src/er/graph/
+├── models.py    # RelationshipEdge / RelationshipException / HierarchyResult,
+│                  plus the relationship-type -> display-label mapping
+├── edges.py     # raw DuckDB lookups: relationships/exceptions/names for one LEI
+└── build.py     # assembles a HierarchyResult - upward + downward edges,
+                   filtering INACTIVE rows, and reporting "missing parent"
+                   exceptions only when no active relationship already answers them
+
+src/er/hierarchy.py   # CLI
+```
+
+The "missing row ≠ confirmed no parent" caution from Phase 2 is enforced directly
+in `build_hierarchy()`: `gleif_relationship_exceptions.parquet` explains *why* a
+parent relationship is absent (`NATURAL_PERSONS`, `NON_CONSOLIDATING`,
+`NO_KNOWN_PERSON`, `NO_LEI`, `NON_PUBLIC`) for exactly the cases where no row
+exists, and an exception is only surfaced when it isn't already answered by an
+active relationship of the corresponding type.
+
+### Run
+
+```bash
+# By LEI directly
+uv run python -m er.hierarchy --lei 635400OCWIKPSEDOHY65
+
+# Or resolve a messy name first (via er.match), then show its hierarchy
+uv run python -m er.hierarchy --name "Albacore Partners I Master Fund" --country IE
+```
+
+Real output for AlbaCore Partners I Master Fund: managed by ALBACORE CAPITAL
+LIMITED, a sub-fund of AlbaCore Partners I ICAV, with direct/ultimate parent
+explained as "entity does not prepare consolidated accounts" rather than silently
+empty. Querying the manager entity itself (`--lei 635400Z5LRZZSML7CV16`) surfaces
+its full managed-fund family — 34 funds — and its own ultimate parent chain up to
+Mitsubishi UFJ Financial Group. This is the "messy observation → canonical entity →
+institutional graph" flow the project has been building toward, now working
+end-to-end.
+
+Out of scope still: SEC/FCA/Companies House enrichment, multi-hop traversal
+(showing a fund's manager's *own* other managed entities beyond one hop), and
+resolving natural-person parents (GLEIF deliberately excludes these from LEI data).
