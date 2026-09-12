@@ -106,6 +106,17 @@ dragging in terminal-presentation code. Each CLI also shows a progress
 spinner while it fetches (rather than a blank screen) and reports how long it
 took.
 
+**Web UI**: a Next.js frontend (`web/`) over a thin FastAPI backend
+(`src/er/api/`) - search by name/LEI/CUSIP, browse a depth-2 relationship tree,
+click any node for its full profile. Same core logic, a different view:
+
+```bash
+make api                 # FastAPI backend on :8000
+cd web && npm run dev    # Next.js dev server
+```
+
+See [`web/README.md`](web/README.md) for details.
+
 Run `make help` for the full target list. All CLIs support `--country` (ISO
 alpha-2 or a common alias like `UK`/`Cayman Islands`) and `--country-mode
 soft|strict`.

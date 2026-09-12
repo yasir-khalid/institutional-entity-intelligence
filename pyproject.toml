@@ -17,6 +17,8 @@ dependencies = [
     "jellyfish>=1.2.1",
     "postal>=1.1.11",
     "rich>=15.0.0",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
 ]
 
 [project.optional-dependencies]

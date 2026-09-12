@@ -85,3 +85,10 @@ test:
 
 evaluate:
 	uv run python -m er.cli.evaluate
+
+# --- Web ----------------------------------------------------------------------
+# Backend API for the Next.js frontend (web/) - a thin translation layer only,
+# see src/er/api/app.py. Run alongside `cd web && npm run dev`.
+
+api:
+	uv run uvicorn er.api.app:app --reload --port 8000

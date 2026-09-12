@@ -79,7 +79,16 @@ docs/          # architecture.md (request-flow detail), phases.md (full build
 tests/         # mirrors src/er/ - pure functions get synthetic-fixture unit
                # tests; nothing here touches live OpenSearch (see er.evaluation
                # for that).
+web/           # Next.js frontend - search/tree/details UI. Talks ONLY to
+               # src/er/api/ over HTTP; never imports Python or touches
+               # Parquet/OpenSearch directly. See web/README.md.
 ```
+
+`src/er/api/` (FastAPI) is the HTTP boundary for `web/` - same rule as
+`er.cli`: it owns no entity-resolution logic, only request/response wiring and
+JSON shaping (`schemas.py`). It calls `er.matching.matcher`, `er.graph.build`,
+and `er.entity.profile` unchanged - the web UI, the CLIs, and any future
+consumer all share the exact same resolution logic, never a reimplementation.
 
 ## CLI separation
 

@@ -505,3 +505,68 @@ grep -rl "import argparse\|import rich\|from rich" src/er/ --include="*.py" | gr
 uv run python -m er.cli.match --name "Sampo Oyj" --country FI
 uv run python -m er.cli.entity --lei R2I72C950HOYXII45366
 ```
+
+## Phase 13: web UI (`web/` + `src/er/api/`)
+
+A Next.js frontend giving the same capability as `er.cli.entity` a visual,
+clickable form: search a name/LEI/CUSIP, see a depth-2 relationship tree, click
+any node for its full profile.
+
+```
+src/er/api/           # FastAPI backend - HTTP wiring + JSON shaping only
+├── app.py            # /api/search, /api/entity/{id}, /api/entity/{id}/tree
+└── schemas.py         # response models, separate from the internal domain
+                        # models (er.matching.models/er.graph.models/
+                        # er.entity.models) - this module's only job is
+                        # shaping data for the frontend.
+
+web/                   # Next.js (App Router, TypeScript, Tailwind)
+├── src/lib/api.ts      # typed fetch client, mirrors schemas.py exactly
+├── src/components/     # SearchBar, ResultsList, EntityTree (react-d3-tree
+│                         wrapper), DetailsPanel
+└── src/app/page.tsx    # wires them together - the only route
+```
+
+Same principle as `er.cli`: the API is a thin translation layer, not a second
+implementation of matching/hierarchy logic. `/api/search` calls
+`er.matching.matcher.match()` for name search (plus lightweight DuckDB lookups
+for direct LEI or CUSIP-based search - the latter joins
+`sec_13f_holdings.parquet` -> `sec_13f_filings.parquet` -> the crosswalk to
+resolve a CUSIP to the GLEIF entities that reported holding it).
+`/api/entity/{id}/tree` calls `er.graph.build.build_hierarchy_tree()`
+unchanged and converts its `HierarchyNode` tree into a frontend-friendly JSON
+shape. `/api/entity/{id}` calls `er.entity.profile.get_entity_profile()`
+unchanged.
+
+Tree rendering uses `react-d3-tree` (a popular, maintained library) rather than
+a hand-rolled D3 layout, per the same "don't rewrite a widely-used capability"
+principle the Python side already follows for libpostal/rapidfuzz/DuckDB.
+
+### Run
+
+```bash
+make api                 # backend on :8000
+cd web && npm run dev    # frontend - picks 3000 or the next free port
+```
+
+### Verify
+
+```bash
+curl "http://localhost:8000/api/search?query=Sampo+Oyj&search_type=name&country=FI"
+curl "http://localhost:8000/api/entity/549300TITGLG7BXCGB39/tree?depth=2"
+cd web && npx tsc --noEmit && npm run build   # TypeScript + production build both clean
+```
+
+Confirmed live: search resolves correctly across all three modes (name via the
+matcher, direct LEI lookup, CUSIP-to-filer join), the tree endpoint returns a
+correctly nested parent/subsidiary structure for a real entity (Fred Alger
+Management, 2 parents + 45 funds), and the frontend's CORS/fetch wiring works
+end to end against the live backend.
+
+Out of scope still: no automated frontend tests (manual verification only,
+given the size of this addition), no authentication on the API (loopback-only
+CORS is the only safeguard - do not deploy this API to a non-localhost address
+without adding auth first), and the tree's bidirectional (parent + child)
+layout is a simplification - `react-d3-tree` renders one root growing
+downward, so upward and downward edges are both shown as the root's direct
+children rather than visually distinguished above/below it.
