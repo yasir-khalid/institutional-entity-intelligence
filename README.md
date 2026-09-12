@@ -23,26 +23,26 @@ with a confidence score and an explanation, never a silent black box.
          │  similar-looking entity (master vs feeder, fund II vs III)
          ▼
 
-  ┌────────────────────────────────────────────────────────────────────┐
-  │                                                                    │
-  │   WHAT THE PLATFORM DOES                                          │
-  │                                                                    │
-  │   ┌───────────┐     ┌───────────┐     ┌────────────┐             │
-  │   │  RETRIEVE │ ──▶ │   SCORE   │ ──▶ │   DECIDE    │             │
-  │   │ "which 20 │     │ "does this│     │ auto-match /│             │
-  │   │ entities  │     │ candidate │     │ send to a   │             │
-  │   │ could this│     │ actually  │     │ human /     │             │
-  │   │ be?"      │     │ match?"   │     │ no match"   │             │
-  │   └───────────┘     └───────────┘     └────────────┘             │
-  │        │                  │                  │                    │
-  │   OpenSearch         explainable          confidence +            │
-  │   candidate          feature scoring      full evidence           │
-  │   search             (name/addr/         trail, never a           │
-  │   over GLEIF         fund-number/        silent black box         │
-  │   (3.4M entities)    master-feeder                                │
-  │                       conflicts)                                  │
-  │                                                                    │
-  └────────────────────────────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────────────┐
+  │                                                           │
+  │ WHAT THE PLATFORM DOES                                    │
+  │                                                           │
+  │ ┌─────────────┐     ┌─────────────┐     ┌─────────────┐   │
+  │ │   RETRIEVE  │ ──▶ │    SCORE    │ ──▶ │    DECIDE   │   │
+  │ │  "which 20  │     │  "does this │     │ auto-match /│   │
+  │ │   entities  │     │  candidate  │     │  send to a  │   │
+  │ │  could this │     │   actually  │     │   human /   │   │
+  │ │     be?"    │     │   match?"   │     │  no match"  │   │
+  │ └─────────────┘     └─────────────┘     └─────────────┘   │
+  │                                                           │
+  │ OpenSearch        explainable       confidence +          │
+  │ candidate         feature scoring   full evidence         │
+  │ search            (name/addr/       trail, never a        │
+  │ over GLEIF        fund-number/      silent black box      │
+  │ (3.4M entities)   master-feeder                           │
+  │                   conflicts)                              │
+  │                                                           │
+  └───────────────────────────────────────────────────────────┘
 
          ▼
   WHAT COMES OUT
