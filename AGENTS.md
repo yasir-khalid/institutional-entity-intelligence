@@ -154,6 +154,19 @@ low `AUTO_MATCH` coverage rate by shrinking the gap threshold without checking
 `make evaluate` run — a wrong entity picked confidently is the single worst
 failure mode this project optimizes against, worse than no match at all.
 
+**Terminal rendering stays out of core logic modules.** `er.entity` splits
+`profile.py`/`build.py`/`sources.py`/`models.py` (zero dependency on rich or
+argparse) from `render.py` (presentation only - takes a finished
+`EntityProfile` and a `Console`, never resolves or queries anything itself)
+from `__main__.py` (argument parsing + wiring only). This is stricter than the
+older CLIs (`er.match`, `er.hierarchy`, `er.family` mix rendering into their
+single-file CLI module) - prefer the `er.entity` split for new modules, since
+it keeps core logic importable (by a future API, a notebook, another CLI)
+without dragging in display code, and keeps rendering testable without a live
+service. A rendering function must also collapse high-cardinality output (many
+identifiers, many relationship edges) to a count + sample rather than dumping
+every row - see `render.py`'s `COLLAPSE_THRESHOLD` pattern.
+
 **A benchmark hard-negative must be checked for third-party collisions.** Any
 strategy that mutates a real name into an adversarial query (stripping tokens,
 abbreviating) can accidentally produce a string that is also the exact, correct
