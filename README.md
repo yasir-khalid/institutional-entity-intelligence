@@ -24,29 +24,44 @@ uv run python -m er.validation              # sanity-check the processed tables
 uv run python -m er.benchmark.generate      # data/benchmark/*.parquet (~1 sec, DuckDB)
 ```
 
-**Day-to-day usage** — three CLIs, from simplest to richest:
+**Day-to-day usage** — three CLIs, from simplest to richest. All three accept
+`--country` (ISO alpha-2 *or* a common alias: `UK`, `United Kingdom`, `USA`,
+`Cayman Islands`, ... — see `COUNTRY_ALIASES` in
+`er/normalisation/countries.py`) and `--country-mode soft|strict`
+(`soft`, the default, is a strong ranking signal that never excludes a candidate;
+`strict` hard-filters to that country only — use it when you're certain the field
+is correct):
 
 ```bash
 # 1. Raw candidate search - "what does OpenSearch think this could be"
 uv run python -m er.search --name "Sampo Oyj" --country FI
 
-# 2. Full resolution - retrieve + score + decide, with evidence
+# 2. Full resolution - retrieve + score + decide, with evidence, retrieval score
+#    vs. match score shown separately, and (for REVIEW/UNMATCHED) a plain-English
+#    reason plus which competing entities are tied
 uv run python -m er.match --name "North Rock Capital" --country GB
 
 # 3. Relationship hierarchy - resolve a name (or pass --lei directly), then show
-#    who manages it / what it's a sub-fund of / what it manages
+#    who manages it / what it's a sub-fund of / what it manages.
+#    --direction parents|children|all (default all) filters which side to show.
 uv run python -m er.hierarchy --name "Albacore Partners I Master Fund" --country IE
-uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16
+uv run python -m er.hierarchy --lei 635400Z5LRZZSML7CV16 --direction parents
 ```
 
-**Testing**:
+**Testing** — two levels, run both after any change to retrieval/scoring/decision logic:
 
 ```bash
-uv run pytest                                    # 75 unit tests, no live services needed
+uv run pytest                                    # 94 unit tests, no live services, ~5s
 uv run python -m er.evaluation.run_benchmark      # scores er.match against the full
-                                                   # 6,000-row benchmark (~5 min, needs
+                                                   # 6,000-row benchmark (~7 min, needs
                                                    # live OpenSearch) -> evaluation_report.json
 ```
+`pytest` covers every pure function (normalization, country aliases, matcher
+features/scoring/decisions/reason-building, query construction, benchmark
+generation, graph traversal) in isolation. `run_benchmark` is the integration-level
+check that has actually caught every real bug found in this project so far (see
+Phase 3/5 below) — a `pytest` pass alone does not mean the live system behaves
+correctly, since the unit tests use synthetic fixtures, not the real index.
 
 `pytest` covers every pure function (normalization, features, scoring, decisions,
 benchmark generation, graph traversal) against small synthetic fixtures — no
@@ -383,3 +398,94 @@ end-to-end.
 Out of scope still: SEC/FCA/Companies House enrichment, multi-hop traversal
 (showing a fund's manager's *own* other managed entities beyond one hop), and
 resolving natural-person parents (GLEIF deliberately excludes these from LEI data).
+
+## Phase 5: country semantics, retrieval/match score separation, better abstention
+
+Two more real bugs found via manual probing (North Rock Capital, Point72), both
+fixed, plus three UX/architecture improvements that came directly out of
+diagnosing them.
+
+**Bug: country was a hard filter, silently excluding the true entity.**
+`--country IE` on the exact registered name of a GB entity returned `UNMATCHED` -
+not because the matcher failed, but because `search_candidates()` used a `filter`
+clause that removed the entity from the candidate pool before scoring ever started.
+Real messy source data routinely has wrong/uncertain country fields, so this was a
+real risk, not a contrived edge case. Fixed: country is now a `boosting` query - a
+strong boost for a match, a real (if smaller) penalty for a mismatch - that can
+never exclude a candidate outright. An explicit `--country-mode strict` still
+exists as an opt-in hard filter for callers who trust the field completely.
+
+**Bug: `--country UK` silently failed to narrow anything.** GLEIF stores ISO
+3166-1 alpha-2 codes (`GB`), but real queries say "UK", "United Kingdom", "USA",
+"Cayman Islands", etc. Without alias resolution, `--country UK` built a retrieval
+query for a country code that doesn't exist in the index. Added
+`COUNTRY_ALIASES` (`er/normalisation/countries.py`) resolved once, at the query
+boundary, in *both* the retrieval layer and the matcher's own scoring features -
+these two must stay in sync, since resolving the alias only in retrieval while
+leaving the matcher's `country_exact`/`jurisdiction_exact` features comparing the
+raw unaliased string caused `--country UK` and `--country GB` to silently produce
+*different match scores* for the identical entity (found and fixed within this
+same change, before it shipped).
+
+**Retrieval score vs. match score, now separate and both shown.** `CandidateScore`
+gained a `retrieval_score` field (OpenSearch's raw relevance score - "how useful is
+this as a candidate") alongside the existing `score` (the deterministic ER
+evidence score - "how much evidence says these are the same entity"). `er.match`'s
+candidate table shows both columns side by side, so a retrieval-layer problem and a
+scoring-layer problem are never confused with each other again.
+
+**REVIEW/UNMATCHED now explain themselves.** Previously: "No confident candidate,"
+full stop. Now, `MatchResult` carries a `reason`, `missing_evidence` (which query
+fields - country, postcode, registration ID - are absent and would actually help),
+and `competing_candidates` when the failure is a genuine tie. Querying "North Rock
+Capital" with no country now reports: *"5 entities share very similar evidence for
+this query (within 5 points of each other: US-DE, AE-DU, GB, HK, SG) - the query
+doesn't contain enough information to distinguish them,"* with all five shown in a
+table. This is deliberately not "forced" into a single winner - a bare brand-style
+name genuinely doesn't disambiguate between five real, unrelated international
+entities all called "North Rock Capital Management," and the system says so instead
+of guessing.
+
+**Hierarchy gained typed, directional traversal.** `er.hierarchy` now takes
+`--direction parents|children|all` and shows each edge's raw GLEIF
+`relationship_type` (`IS_FUND-MANAGED_BY`, `IS_ULTIMATELY_CONSOLIDATED_BY`, etc.)
+alongside its human label, not just the label alone.
+
+### Net effect on the benchmark
+
+Re-ran `er.evaluation.run_benchmark` after each fix (cumulative from the Phase 3
+baseline: Recall@20 71.1%, AUTO_MATCH precision 98.0%, dangerous-failure rate 2.7%):
+
+| | Phase 3 baseline | + country boosting fix | + alias/scoring-sync fix (final) |
+|---|---|---|---|
+| Recall@20 (overall) | 71.1% | 75.0% | 74.9% |
+| Recall@20 (confusable pairs) | 77.5% | — | **98.1%** |
+| AUTO_MATCH precision | 98.0% | 95.5% | 96.3% |
+| Dangerous-failure rate (confusable pairs) | 2.7% | 6.3% | 6.1% |
+
+The country fix is a clear net win for retrieval — confusable-pair Recall@20 jumped
+from 77.5% to 98.1%, since the old hard filter was silently dropping the true
+entity in some of those adversarial cases too, not just the two hand-picked
+examples that surfaced the bug. But it's not free: broader, more inclusive
+retrieval also means more opportunities for the scorer to confidently pick the
+wrong twin among genuinely confusable pairs, and the dangerous-failure rate reflects
+that honestly rather than hiding it. **This is now the clearest concrete target for
+the next scoring-side improvement** - the retrieval layer is finding the right
+answer far more often; the remaining gap is in the scorer's confidence calibration
+on confusable pairs specifically.
+
+### Still open (not built)
+
+From the broader roadmap this phase's findings pointed toward:
+- **Brand/family vs. legal-entity resolution as a first-class distinction** - a
+  bare brand name like "Point72" arguably shouldn't resolve to one LEI at all; it
+  should trigger a *"here are the N legal entities under this brand"* response
+  instead of a single-entity match/abstain. Not yet a separate code path -
+  currently just falls out of REVIEW/UNMATCHED's tie-detection as a side effect.
+- **Adversarial hedge-fund-specific cases in the auto-generated benchmark** (Point72
+  Asset Management LP vs. Point72 Europe LLP; brand-vs-legal-entity pairs
+  specifically, as opposed to the fund-number/master-feeder pairs already covered).
+- **Failure-analysis categorization** in the evaluation report (wrong legal entity /
+  correct entity missing from candidates / country conflict / fund-manager
+  confusion), beyond the current aggregate precision/recall numbers.
+- External sources (SEC/FCA/Companies House) - still last, per the original design.

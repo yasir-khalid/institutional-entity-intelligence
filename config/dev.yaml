@@ -46,3 +46,4 @@ matching:
     auto_match_min_score: 140
     auto_match_min_gap: 30
     review_min_score: 90
+    tie_tolerance: 5

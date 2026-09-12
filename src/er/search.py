@@ -15,14 +15,21 @@ from er.retrieval.candidates import search_candidates
 def main() -> None:
     parser = argparse.ArgumentParser(description="Search GLEIF candidate entities")
     parser.add_argument("--name", required=True)
-    parser.add_argument("--country", default=None, help="ISO alpha-2, e.g. IE")
+    parser.add_argument("--country", default=None, help="ISO alpha-2 or common alias, e.g. IE, UK")
+    parser.add_argument(
+        "--country-mode",
+        default="soft",
+        choices=["soft", "strict"],
+        help="soft (default): country is a strong ranking signal, never excludes a candidate. "
+        "strict: hard-filter to only that country.",
+    )
     parser.add_argument("--size", type=int, default=None)
     args = parser.parse_args()
 
     console = Console()
     cfg = load_config()
     client = get_client(cfg)
-    results = search_candidates(client, cfg, args.name, args.country, args.size)
+    results = search_candidates(client, cfg, args.name, args.country, args.size, args.country_mode)
 
     if not results:
         console.print("[dim]No candidates found.[/dim]")

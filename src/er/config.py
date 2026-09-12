@@ -66,6 +66,11 @@ class MatchingDecisionThresholds(BaseModel):
     auto_match_min_score: float = 140
     auto_match_min_gap: float = 30
     review_min_score: float = 90
+    # Candidates within this many points of the top score are considered "tied" -
+    # i.e. the query doesn't contain enough information to distinguish them (e.g.
+    # "North Rock Capital" alone can't tell apart 5 same-named entities across 5
+    # countries). Used only to build a human-readable reason, not in decide() itself.
+    tie_tolerance: float = 5.0
 
 
 class MatchingConfig(BaseModel):

@@ -21,7 +21,7 @@ from __future__ import annotations
 from rapidfuzz import fuzz
 
 from er.normalisation.addresses import normalize_postcode, postcode_outward
-from er.normalisation.countries import country_from_jurisdiction
+from er.normalisation.countries import country_from_jurisdiction, normalize_country_code
 from er.normalisation.names import build_name_fields
 
 
@@ -34,7 +34,17 @@ def build_query_record(
 ) -> dict:
     """Turn raw query inputs into the record shape features.py expects, deriving
     name_norm/name_core/fund_number/is_master/is_feeder via the same normalization
-    used at ingestion time (er.normalisation.names.build_name_fields)."""
+    used at ingestion time (er.normalisation.names.build_name_fields).
+
+    country is resolved through normalize_country_code (aliases like "UK"/"United
+    Kingdom" -> "GB") here, once, at the boundary - every feature function below
+    then compares against a canonical code, rather than each one needing to
+    remember to normalize it separately. This must match what
+    er.retrieval.candidates does with the same query country, or a candidate
+    retrieved via a correctly-aliased search could still fail the matcher's own
+    country_exact/jurisdiction_exact scoring (verified: this exact split caused
+    "--country UK" to score visibly lower than the equivalent "--country GB").
+    """
     name_fields = build_name_fields(name)
     postcode_norm = normalize_postcode(postcode)
     return {
@@ -44,7 +54,7 @@ def build_query_record(
         "fund_number": name_fields["fund_number"],
         "is_master": name_fields["is_master"],
         "is_feeder": name_fields["is_feeder"],
-        "country": country,
+        "country": normalize_country_code(country),
         "postcode": postcode_norm,
         "postcode_prefix": postcode_outward(postcode_norm) if postcode_norm else None,
         "city": city,
