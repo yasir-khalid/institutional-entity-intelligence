@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import re
 
-from postal.parser import parse_address as _postal_parse_address
-
 _NON_ALNUM_RE = re.compile(r"[^A-Z0-9]")
 _UK_OUTWARD_RE = re.compile(r"^([A-Z]{1,2}\d[A-Z0-9]?)")
 
@@ -56,7 +54,18 @@ def parse_address_components(*parts: str | None) -> dict[str, str]:
     libpostal handles real-world address messiness (word order, missing punctuation,
     abbreviations, transliteration) far better than a hand-rolled regex would - it's
     trained on GLEIF's own upstream data among other sources (OpenAddresses/OSM).
+
+    Imports postal.parser lazily, on first call, rather than at module level -
+    loading libpostal's trained model data takes several seconds, and every live
+    query path (er.matching.features, and everything built on it: er.cli.match/
+    entity/hierarchy/family) only needs normalize_postcode/postcode_outward from
+    this module, never this function. A module-level import made every CLI's
+    cold start several seconds slower for a capability only GLEIF ingestion
+    actually uses (confirmed live: `python -m er.cli.match` startup dropped from
+    ~4s to ~0.2s after making this lazy).
     """
+    from postal.parser import parse_address as _postal_parse_address
+
     joined = " ".join(p.strip() for p in parts if p and p.strip())
     if not joined:
         return {}

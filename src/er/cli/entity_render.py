@@ -63,10 +63,14 @@ def _render_relationships(console: Console, profile: EntityProfile) -> None:
     for exc in hierarchy.exceptions:
         groups.setdefault(("Upward", exc.label), []).append(f"[dim]{exc.reason_text}[/dim]")
 
+    # max_width on "Entities" keeps this table a fixed, readable size regardless
+    # of terminal width - without it, rich stretches the one wide text column to
+    # fill an ultra-wide terminal, which looked inconsistent next to the compact
+    # Identifiers table right above it.
     table = Table(title="GLEIF relationships")
-    table.add_column("Direction")
-    table.add_column("Label")
-    table.add_column("Entities")
+    table.add_column("Direction", max_width=10)
+    table.add_column("Label", max_width=20)
+    table.add_column("Entities", max_width=70)
     for (direction, label), names in groups.items():
         if len(names) > COLLAPSE_THRESHOLD:
             sample = ", ".join(names[:3])
@@ -99,8 +103,14 @@ def _render_sec_13f(console: Console, profile: EntityProfile) -> None:
     )
     table = Table(title="Latest SEC 13F reported holdings (top 10 by value)")
     table.add_column("Issuer")
-    table.add_column("Value ($000s)", justify="right")
+    table.add_column("Value ($)", justify="right")
     for h in sec.top_reported_holdings:
+        # SEC's 13F VALUE field has been reported in whole dollars since the 2023
+        # rule change (the older "thousands of dollars" convention no longer
+        # applies) - confirmed against raw data: price-per-share derived from
+        # VALUE/shares lines up with real historical share prices only when VALUE
+        # is treated as dollars, not thousands (e.g. $40.34/share for a real
+        # CoStar Group position, not $40,340/share).
         table.add_row(h.name_of_issuer, f"{h.value:,}" if h.value is not None else "-")
     console.print(table)
 
