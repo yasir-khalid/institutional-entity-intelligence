@@ -100,7 +100,14 @@ export default function Home() {
       </header>
 
       {showResultsPicker && (
-        <div className="shrink-0 border-b border-slate-200 px-6 py-3">
+        // max-h + overflow-y-auto is load-bearing, not cosmetic: without a
+        // cap, a result set with many rows (e.g. a brand name like "Point72"
+        // returning 10+ legal entities) grows unbounded and can squeeze the
+        // flex-1 tree/details area below it down to zero height on a normal
+        // laptop screen - clicks would still fire and fetch data (network
+        // tab shows it), but the newly-rendered tree/details section would
+        // be invisible at 0px tall. Confirmed live: this was exactly that bug.
+        <div className="max-h-56 shrink-0 overflow-y-auto border-b border-slate-200 px-6 py-3">
           <h2 className="mb-2 text-sm font-semibold text-slate-700">Results - pick one to explore</h2>
           <ResultsList results={results} onSelect={loadTree} />
         </div>
