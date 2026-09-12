@@ -21,13 +21,24 @@ from er.entity.models import EntityIdentifier, EntityProfile
 # dedicated multi-hop view for relationships specifically.
 COLLAPSE_THRESHOLD = 5
 
+# Every table in this profile renders at the same fixed width - without this,
+# each rich Table sizes itself independently (to its own content), so three
+# stacked tables of different widths look like an inconsistent, unrefined
+# report rather than one coherent profile. Capped against the real console
+# width (_table_width) so it never overflows a narrower terminal.
+PROFILE_WIDTH = 88
+
+
+def _table_width(console: Console) -> int:
+    return min(console.size.width, PROFILE_WIDTH)
+
 
 def _render_identifiers(console: Console, profile: EntityProfile) -> None:
     by_type: dict[str, list[EntityIdentifier]] = {}
     for ident in profile.identifiers:
         by_type.setdefault(ident.identifier_type, []).append(ident)
 
-    table = Table(title="Identifiers", show_lines=False)
+    table = Table(title="Identifiers", show_lines=False, width=_table_width(console))
     table.add_column("Type")
     table.add_column("Value")
     table.add_column("Source")
@@ -63,14 +74,10 @@ def _render_relationships(console: Console, profile: EntityProfile) -> None:
     for exc in hierarchy.exceptions:
         groups.setdefault(("Upward", exc.label), []).append(f"[dim]{exc.reason_text}[/dim]")
 
-    # max_width on "Entities" keeps this table a fixed, readable size regardless
-    # of terminal width - without it, rich stretches the one wide text column to
-    # fill an ultra-wide terminal, which looked inconsistent next to the compact
-    # Identifiers table right above it.
-    table = Table(title="GLEIF relationships")
+    table = Table(title="GLEIF relationships", width=_table_width(console))
     table.add_column("Direction", max_width=10)
-    table.add_column("Label", max_width=20)
-    table.add_column("Entities", max_width=70)
+    table.add_column("Label", max_width=16)
+    table.add_column("Entities")
     for (direction, label), names in groups.items():
         if len(names) > COLLAPSE_THRESHOLD:
             sample = ", ".join(names[:3])
@@ -101,7 +108,7 @@ def _render_sec_13f(console: Console, profile: EntityProfile) -> None:
         "portfolio - 13F excludes shorts, derivatives, non-US securities, private investments, "
         "and small positions below reporting thresholds.[/dim]"
     )
-    table = Table(title="Latest SEC 13F reported holdings (top 10 by value)")
+    table = Table(title="Latest SEC 13F reported holdings (top 10 by value)", width=_table_width(console))
     table.add_column("Issuer")
     table.add_column("Value ($)", justify="right")
     for h in sec.top_reported_holdings:
