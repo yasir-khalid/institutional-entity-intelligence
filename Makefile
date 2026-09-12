@@ -1,12 +1,13 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help ingest-gleif index validate benchmark pipeline test evaluate
+.PHONY: help ingest-gleif ingest-sec-13f index validate benchmark pipeline test evaluate crosswalk-sec-13f
 
 help:
 	@echo "Institutional Entity Intelligence - available targets:"
 	@echo ""
 	@echo "  Data sources (each isolated under src/er/datasources/<source>/):"
 	@echo "    make ingest-gleif    Parse raw GLEIF files -> data/processed/*.parquet (~10-15 min)"
+	@echo "    make ingest-sec-13f  Parse raw SEC 13F bulk data -> data/processed/*.parquet (~1-2 min)"
 	@echo "    ... add ingest-<source> here as new sources are added (SEC Form ADV, FCA, ...)"
 	@echo ""
 	@echo "  Shared pipeline (source-agnostic - runs after any/all ingest-* targets):"
@@ -14,6 +15,9 @@ help:
 	@echo "    make validate        Data-quality checks over the processed tables"
 	@echo "    make benchmark       Regenerate the auto-labeled benchmark (~1s, DuckDB)"
 	@echo "    make pipeline        Full pipeline: all ingest-* -> index -> validate -> benchmark"
+	@echo ""
+	@echo "  Crosswalks (resolve another source's records to a GLEIF LEI, needs live OpenSearch):"
+	@echo "    make crosswalk-sec-13f  Resolve unique SEC 13F filers -> GLEIF LEI (~5-10 min, ~10.7k filers)"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    make test            Unit test suite (no live services needed, ~5s)"
@@ -32,10 +36,13 @@ help:
 ingest-gleif:
 	uv run python -m er.datasources.gleif.ingest
 
+ingest-sec-13f:
+	uv run python -m er.datasources.sec_13f.ingest
+
 # ingest-sec-adv:
 # 	uv run python -m er.datasources.sec_adv.ingest
 
-INGEST_TARGETS := ingest-gleif
+INGEST_TARGETS := ingest-gleif ingest-sec-13f
 
 # --- Shared pipeline (source-agnostic) ---------------------------------------
 
@@ -49,6 +56,12 @@ benchmark:
 	uv run python -m er.benchmark.generate
 
 pipeline: $(INGEST_TARGETS) index validate benchmark
+
+# --- Crosswalks (resolve another source's records to a GLEIF LEI) -----------
+# Reuses er.matching.matcher.match() unchanged - needs a live, indexed OpenSearch.
+
+crosswalk-sec-13f:
+	uv run python -m er.crosswalk.sec_13f_to_gleif
 
 # --- Testing ------------------------------------------------------------------
 

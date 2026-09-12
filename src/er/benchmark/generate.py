@@ -47,6 +47,7 @@ EVALUATION_PAIRS_SCHEMA = pa.schema(
         ("confusable_lei", pa.string()),
         ("case_type", pa.string()),
         ("difficulty", pa.string()),
+        ("conflict_type", pa.string()),
         ("source", pa.string()),
     ]
 )
@@ -214,7 +215,7 @@ def build_evaluation_pairs(cfg: AppConfig, positives_path: Path, hard_negatives_
         pos_rows = con.sql(f"SELECT * FROM capped ORDER BY random() LIMIT {eval_size}").fetchall()
 
     neg_rows = con.sql(f"""
-        SELECT lei_a, lei_b, aggressive_core, jurisdiction
+        SELECT lei_a, lei_b, aggressive_core, jurisdiction, conflict_type
         FROM read_parquet('{hard_negatives_path}')
         ORDER BY random()
         LIMIT {neg_size}
@@ -234,11 +235,12 @@ def build_evaluation_pairs(cfg: AppConfig, positives_path: Path, hard_negatives_
                 "confusable_lei": None,
                 "case_type": "isin_confirmed",
                 "difficulty": difficulty,
+                "conflict_type": None,
                 "source": "positives",
             }
         )
 
-    for i, (lei_a, lei_b, aggressive_core, jurisdiction) in enumerate(neg_rows):
+    for i, (lei_a, lei_b, aggressive_core, jurisdiction, conflict_type) in enumerate(neg_rows):
         rows.append(
             {
                 "pair_id": f"neg_{i:07d}",
@@ -249,6 +251,7 @@ def build_evaluation_pairs(cfg: AppConfig, positives_path: Path, hard_negatives_
                 "confusable_lei": lei_b,
                 "case_type": "confusable_pair",
                 "difficulty": "hard",
+                "conflict_type": conflict_type,
                 "source": "hard_negatives",
             }
         )

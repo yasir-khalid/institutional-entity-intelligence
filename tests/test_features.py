@@ -99,6 +99,28 @@ def test_no_master_feeder_conflict_when_neither_side_claims_it():
     assert f["feeder_conflict"] is False
 
 
+def test_no_master_feeder_conflict_when_query_is_ambiguous_but_candidate_is_not():
+    # Regression test / experiment 003: a query with the master/feeder token stripped
+    # (e.g. an abbreviated query, or a benchmark case_type=confusable_pair row built
+    # from aggressive_core - see er.benchmark.generate) has is_master=is_feeder=False
+    # by default - that must NOT be read as "query asserts non-master", or it silently
+    # penalizes whichever candidate genuinely IS a master/feeder fund, favoring the
+    # wrong (plain) candidate. Confirmed this was live behavior before the fix.
+    q = build_query_record("Acme Global Credit Fund")  # no master/feeder token at all
+    master_candidate = _candidate(is_master=True, is_feeder=False)
+    feeder_candidate = _candidate(is_master=False, is_feeder=True)
+    assert compute_features(q, master_candidate)["master_conflict"] is False
+    assert compute_features(q, feeder_candidate)["feeder_conflict"] is False
+
+
+def test_master_feeder_conflict_still_detected_when_query_asserts_the_other():
+    q = build_query_record("Acme Global Credit Master Fund")
+    feeder_candidate = _candidate(is_master=False, is_feeder=True)
+    f = compute_features(q, feeder_candidate)
+    assert f["master_conflict"] is True
+    assert f["feeder_conflict"] is True
+
+
 def test_country_exact_tolerates_subnational_jurisdiction():
     q = build_query_record("Acme Corp", country="US")
     c = _candidate(legal_country="US-DE", jurisdiction="US-DE")

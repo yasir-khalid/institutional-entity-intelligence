@@ -1,0 +1,43 @@
+# Experiments
+
+A record of techniques tried against the real benchmark (`data/benchmark/evaluation_pairs.parquet`,
+scored via `make evaluate` / `uv run python -m er.evaluation.run_benchmark`), not just ideas -
+every experiment here has a measured before/after number attached, and is explicitly marked
+**VALIDATED** (kept, shipped) or **INVALIDATED** (tried, measured, reverted or not adopted).
+
+This exists so a change to scoring/retrieval is never re-litigated from scratch, and so a
+technique that sounds reasonable but didn't move the needle doesn't get re-tried blind six
+months from now.
+
+## Format
+
+One file per experiment: `NNN-short-slug.md`, numbered in the order they were run. Each file:
+
+```markdown
+# NNN: Title
+
+**Status:** VALIDATED | INVALIDATED | INCONCLUSIVE
+**Date:** YYYY-MM-DD
+**Targets:** which flagged gap this addresses (link back to README's "still open" list)
+
+## Hypothesis
+One or two sentences: what change, why it should help.
+
+## Method
+What was actually changed (files, exact diff summary) and how it was measured
+(exact command run, e.g. `make evaluate`).
+
+## Result
+Before/after numbers, verbatim from the evaluation report - not paraphrased.
+
+## Verdict
+Kept or reverted, and why. If INVALIDATED, what to try instead (if anything comes to mind).
+```
+
+## Index
+
+| # | Title | Status | Targets |
+|---|---|---|---|
+| [001](001-compact-name-field-for-glued-queries.md) | Compact (space-stripped) keyword field for glued/no-space name queries | VALIDATED | Medium-tier recall (~55%) |
+| [002](002-failure-analysis-categorization.md) | Categorize evaluation failures instead of just aggregate precision/recall | VALIDATED | Failure-analysis categorization |
+| [003](003-fix-master-feeder-conflict-false-positive.md) | Fix master/feeder conflict false-positive on ambiguous queries | VALIDATED | Confusable-pair dangerous-failure rate |

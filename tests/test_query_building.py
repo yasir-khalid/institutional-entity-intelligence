@@ -70,6 +70,20 @@ def test_country_is_uppercased():
     assert country_clauses[0]["term"]["legal_country"]["value"] == "GB"
 
 
+def test_compact_name_clause_matches_space_stripped_query():
+    # Regression test / experiment 001: a glued query like "fnbbank" tokenizes to
+    # ONE token under a standard analyzer, with zero term overlap against a
+    # properly-spaced indexed name - confirmed live this returned ZERO candidates
+    # before this clause existed. legal_name_compact is an exact-match keyword
+    # field for exactly this case.
+    body = build_candidate_query("FNB Bank", None, size=20)
+    should = _name_should_clauses(body)
+    compact_clauses = [c for c in should if "term" in c and "legal_name_compact" in c["term"]]
+    assert len(compact_clauses) == 1
+    assert compact_clauses[0]["term"]["legal_name_compact"]["value"] == "fnbbank"
+    assert compact_clauses[0]["term"]["legal_name_compact"]["boost"] > 0
+
+
 def test_country_aliases_are_normalized():
     # "UK"/"United Kingdom" don't exist in GLEIF's stored data (which uses ISO
     # alpha-2 "GB") - without alias resolution, --country UK would silently fail to

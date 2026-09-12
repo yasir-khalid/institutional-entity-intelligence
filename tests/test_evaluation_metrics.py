@@ -2,8 +2,10 @@ from er.evaluation.metrics import (
     RowResult,
     auto_match_coverage,
     auto_match_precision,
+    categorize,
     dangerous_failure_rate,
     decision_rates,
+    failure_breakdown,
     mean_reciprocal_rank,
     recall_at_k,
     summarize,
@@ -15,6 +17,7 @@ def _row(
     pair_id="p1",
     case_type="isin_confirmed",
     difficulty="easy",
+    conflict_type=None,
     expected_lei="LEI_A",
     confusable_lei=None,
     candidate_leis=("LEI_A", "LEI_B"),
@@ -25,6 +28,7 @@ def _row(
         pair_id=pair_id,
         case_type=case_type,
         difficulty=difficulty,
+        conflict_type=conflict_type,
         expected_lei=expected_lei,
         confusable_lei=confusable_lei,
         candidate_leis=list(candidate_leis),
@@ -121,3 +125,49 @@ def test_summarize_returns_expected_keys():
     assert "recall_at_1" in summary
     assert "auto_match_precision" in summary
     assert "dangerous_failure_rate_confusable_pairs" in summary
+    assert "failure_breakdown" in summary
+
+
+def test_categorize_success():
+    row = _row(decision="AUTO_MATCH", chosen_lei="LEI_A", expected_lei="LEI_A")
+    assert categorize(row) == "success"
+
+
+def test_categorize_wrong_auto_match():
+    row = _row(decision="AUTO_MATCH", chosen_lei="LEI_B", expected_lei="LEI_A")
+    assert categorize(row) == "wrong_auto_match"
+
+
+def test_categorize_retrieval_miss():
+    row = _row(decision="UNMATCHED", candidate_leis=("LEI_X", "LEI_Y"), expected_lei="LEI_A")
+    assert categorize(row) == "retrieval_miss"
+
+
+def test_categorize_under_confident_top1():
+    # Correct entity retrieved AND ranked first, but the matcher still didn't commit -
+    # a threshold/scoring-margin problem, distinct from a retrieval failure.
+    row = _row(decision="REVIEW", candidate_leis=("LEI_A", "LEI_B"), expected_lei="LEI_A")
+    assert categorize(row) == "under_confident_top1"
+
+
+def test_categorize_correctly_deferred():
+    # Correct entity retrieved but NOT ranked first - declining to AUTO_MATCH here is
+    # the right call, not a bug, so this must not land in the same bucket as a real
+    # scoring failure.
+    row = _row(decision="REVIEW", candidate_leis=("LEI_B", "LEI_A"), expected_lei="LEI_A")
+    assert categorize(row) == "correctly_deferred"
+
+
+def test_failure_breakdown_sums_to_one():
+    rows = [
+        _row(decision="AUTO_MATCH", chosen_lei="LEI_A", expected_lei="LEI_A"),
+        _row(decision="AUTO_MATCH", chosen_lei="LEI_B", expected_lei="LEI_A"),
+        _row(decision="UNMATCHED", candidate_leis=("LEI_X",), expected_lei="LEI_A"),
+        _row(decision="REVIEW", candidate_leis=("LEI_A", "LEI_B"), expected_lei="LEI_A"),
+    ]
+    breakdown = failure_breakdown(rows)
+    assert breakdown["success"] == 0.25
+    assert breakdown["wrong_auto_match"] == 0.25
+    assert breakdown["retrieval_miss"] == 0.25
+    assert breakdown["under_confident_top1"] == 0.25
+    assert abs(sum(breakdown.values()) - 1.0) < 1e-9

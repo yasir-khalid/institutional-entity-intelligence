@@ -37,6 +37,7 @@ def evaluate(cfg, client) -> list[RowResult]:
                 pair_id=p["pair_id"],
                 case_type=p["case_type"],
                 difficulty=p["difficulty"],
+                conflict_type=p["conflict_type"],
                 expected_lei=p["expected_lei"],
                 confusable_lei=p["confusable_lei"],
                 candidate_leis=[c.lei for c in result.candidates],
@@ -60,6 +61,15 @@ def build_report(results: list[RowResult]) -> dict:
         "by_case_type": {
             c: summarize([r for r in results if r.case_type == c])
             for c in ("isin_confirmed", "confusable_pair")
+        },
+        # Slices dangerous_failure_rate/failure_breakdown per hard_negatives conflict
+        # type (fund_number / master_feeder / other_same_core) - without this, a fix
+        # targeted at one conflict type (e.g. experiment 003's master/feeder fix) is
+        # invisible in the aggregate confusable_pair metric whenever that type is a
+        # small fraction of the sampled pool.
+        "by_conflict_type": {
+            c: summarize([r for r in results if r.conflict_type == c])
+            for c in ("fund_number", "master_feeder", "other_same_core")
         },
     }
 

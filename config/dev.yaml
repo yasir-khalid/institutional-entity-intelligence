@@ -7,6 +7,11 @@ gleif:
   isin_lei_zip: isin-lei-20260911T071509.zip
   batch_size: 50000
 
+sec_13f:
+  raw_dir: data/raw/sec_13f
+  processed_dir: data/processed
+  batch_size: 50000
+
 opensearch:
   index_name: gleif_entities_v1
   number_of_shards: 2

@@ -154,13 +154,37 @@ def fund_number_conflict(query: dict, candidate: dict) -> bool:
     return q is not None and c is not None and q != c
 
 
+def _query_asserts_fund_structure(query: dict) -> bool:
+    return bool(query.get("is_master")) or bool(query.get("is_feeder"))
+
+
 def master_conflict(query: dict, candidate: dict) -> bool:
-    """True when exactly one side claims to be a master fund - if neither does,
-    != is already False, so no extra "at least one is True" check is needed."""
+    """True only when the query POSITIVELY asserts master or feeder (i.e. that token
+    actually appears in the query name) and the candidate's own flag contradicts it.
+
+    is_master/is_feeder are derived from name text (see
+    er.normalisation.names.extract_fund_structure_tokens), so "False" is ambiguous: it
+    can mean "explicitly not a master fund" OR "the query name simply didn't include
+    that token" (e.g. an abbreviated query, or a benchmark case_type=confusable_pair
+    row whose query is deliberately built from aggressive_core with master/feeder
+    tokens stripped - see er.benchmark.generate). Without this guard, every such query
+    (is_master=False by default) registered a "conflict" against any TRUE master
+    candidate but not against a feeder candidate - asymmetrically and wrongly
+    penalizing the actually-correct master-fund entity whenever the query simply
+    hadn't mentioned "master" (confirmed live: this pattern is exactly what the
+    confusable_pair master_feeder benchmark rows exercise). Requiring the query to
+    positively assert a fund-structure claim before checking for contradiction fixes
+    this while still catching genuine "query says master, candidate is feeder"
+    conflicts.
+    """
+    if not _query_asserts_fund_structure(query):
+        return False
     return bool(query.get("is_master")) != bool(candidate.get("is_master"))
 
 
 def feeder_conflict(query: dict, candidate: dict) -> bool:
+    if not _query_asserts_fund_structure(query):
+        return False
     return bool(query.get("is_feeder")) != bool(candidate.get("is_feeder"))
 
 

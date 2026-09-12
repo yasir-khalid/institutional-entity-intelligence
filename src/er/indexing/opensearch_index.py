@@ -44,6 +44,14 @@ MAPPING = {
         "legal_name": {"type": "text"},
         "legal_name_norm": {"type": "text"},
         "legal_name_core": {"type": "text"},
+        # Derived at index time (legal_name_norm with spaces removed), not stored in
+        # Parquet - exists purely so a "glued" no-space query (e.g. "fnbbank") can
+        # retrieve its match at all. Standard-analyzer tokenization gives a single
+        # query token zero overlap with the properly-spaced indexed tokens, so such
+        # queries returned ZERO candidates before this field existed (confirmed via
+        # er.retrieval.candidates.search_candidates - see experiments/001). keyword,
+        # not text, since this is meant for exact compact-string equality only.
+        "legal_name_compact": {"type": "keyword"},
         "aliases_norm": {"type": "text"},
         "jurisdiction": {"type": "keyword"},
         "registration_id": {"type": "keyword"},
@@ -61,7 +69,19 @@ MAPPING = {
 
 
 def get_client(cfg: AppConfig) -> OpenSearch:
-    return OpenSearch(hosts=[cfg.opensearch_url], use_ssl=cfg.opensearch_url.startswith("https"))
+    # A long-running caller (er.evaluation.run_benchmark, er.crosswalk) makes
+    # thousands of sequential requests - the default 10s timeout with no retry is
+    # too brittle for that (confirmed live: a single transient read timeout, likely
+    # from cluster load right after a large bulk reindex, killed a multi-minute
+    # evaluation run outright). Retrying idempotent GET/POST _search requests on a
+    # timeout is safe - a search has no side effects to double-apply.
+    return OpenSearch(
+        hosts=[cfg.opensearch_url],
+        use_ssl=cfg.opensearch_url.startswith("https"),
+        timeout=30,
+        max_retries=3,
+        retry_on_timeout=True,
+    )
 
 
 def create_index(client: OpenSearch, cfg: AppConfig, recreate: bool = False) -> None:
@@ -85,7 +105,10 @@ def create_index(client: OpenSearch, cfg: AppConfig, recreate: bool = False) -> 
 
 
 def _row_to_doc(row: dict) -> dict:
-    return {field: row.get(field) for field in RETRIEVAL_FIELDS}
+    doc = {field: row.get(field) for field in RETRIEVAL_FIELDS}
+    name_norm = row.get("legal_name_norm")
+    doc["legal_name_compact"] = name_norm.replace(" ", "") if name_norm else None
+    return doc
 
 
 def bulk_load(client: OpenSearch, cfg: AppConfig) -> int:
@@ -126,10 +149,18 @@ def bulk_load(client: OpenSearch, cfg: AppConfig) -> int:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Create/bulk-load the GLEIF OpenSearch index")
+    parser.add_argument(
+        "--recreate", action="store_true", help="drop and recreate the index first (needed after a mapping change)"
+    )
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     cfg = load_config()
     client = get_client(cfg)
-    create_index(client, cfg)
+    create_index(client, cfg, recreate=args.recreate)
     bulk_load(client, cfg)
     stats = client.cat.indices(index=cfg.opensearch.index_name, format="json")
     logger.info("index stats: %s", stats)

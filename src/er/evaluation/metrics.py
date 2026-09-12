@@ -16,6 +16,7 @@ class RowResult:
     pair_id: str
     case_type: str
     difficulty: str
+    conflict_type: str | None
     expected_lei: str
     confusable_lei: str | None
     candidate_leis: list[str]  # ranked, best first
@@ -82,6 +83,52 @@ def dangerous_failure_rate(rows: list[RowResult]) -> float | None:
     return dangerous / len(confusable)
 
 
+FAILURE_CATEGORIES = (
+    "success",
+    "retrieval_miss",
+    "wrong_auto_match",
+    "under_confident_top1",
+    "correctly_deferred",
+)
+
+
+def categorize(row: RowResult) -> str:
+    """Buckets every row into exactly one category, not just "pass"/"fail" - so a
+    retrieval problem (expected entity never even reached the candidate pool) is never
+    conflated with a scoring/threshold problem (it was retrieved, ranked first, but the
+    matcher still didn't have confidence to act), since those two need entirely
+    different fixes.
+
+    - retrieval_miss: expected entity absent from the candidate pool entirely - a
+      retrieval-layer bug (see experiments/001), scoring never even got a chance.
+    - wrong_auto_match: matcher committed to the WRONG entity with confidence - the
+      single most costly failure mode (dangerous_failure_rate_confusable_pairs measures
+      this specifically for confusable_pair rows; this category covers it project-wide).
+    - under_confident_top1: the correct entity was retrieved AND ranked first, but the
+      matcher still didn't AUTO_MATCH - a threshold/scoring-margin problem, not a
+      retrieval or ranking problem.
+    - correctly_deferred: the correct entity was retrieved but NOT ranked first, and the
+      matcher (correctly) declined to AUTO_MATCH - not a bug, but tracked separately from
+      "success" since it still means a human has to resolve the case.
+    - success: AUTO_MATCH and correct.
+    """
+    if row.decision == "AUTO_MATCH":
+        return "success" if row.chosen_lei == row.expected_lei else "wrong_auto_match"
+    if row.expected_lei not in row.candidate_leis:
+        return "retrieval_miss"
+    if row.candidate_leis[0] == row.expected_lei:
+        return "under_confident_top1"
+    return "correctly_deferred"
+
+
+def failure_breakdown(rows: list[RowResult]) -> dict[str, float]:
+    n = len(rows) or 1
+    counts = {cat: 0 for cat in FAILURE_CATEGORIES}
+    for r in rows:
+        counts[categorize(r)] += 1
+    return {cat: round(count / n, 4) for cat, count in counts.items()}
+
+
 def summarize(rows: list[RowResult]) -> dict:
     summary = {
         "n": len(rows),
@@ -93,6 +140,7 @@ def summarize(rows: list[RowResult]) -> dict:
         "mrr": round(mean_reciprocal_rank(rows), 4),
         "decision_rates": {k: round(v, 4) for k, v in decision_rates(rows).items()},
         "auto_match_coverage": round(auto_match_coverage(rows), 4),
+        "failure_breakdown": failure_breakdown(rows),
     }
     precision = auto_match_precision(rows)
     summary["auto_match_precision"] = round(precision, 4) if precision is not None else None

@@ -34,6 +34,12 @@ def build_candidate_query(
         {"match": {"legal_name_norm": {"query": fields["legal_name_norm"], "boost": 5}}},
         {"match": {"legal_name_core": {"query": fields["legal_name_core"], "boost": 3}}},
         {"match": {"aliases_norm": {"query": fields["legal_name_norm"], "boost": 2}}},
+        # Glued/no-space queries ("fnbbank") tokenize to a single token under a
+        # standard analyzer, which has zero term overlap with a properly-spaced
+        # indexed name - the `match` clauses above return NOTHING for these
+        # (confirmed empirically, see experiments/001). This exact-match clause on
+        # a compact (space-stripped) form catches exactly that case.
+        {"term": {"legal_name_compact": {"value": fields["legal_name_norm"].replace(" ", ""), "boost": 4}}},
     ]
     name_query: dict = {"bool": {"should": should, "minimum_should_match": 1}}
 
