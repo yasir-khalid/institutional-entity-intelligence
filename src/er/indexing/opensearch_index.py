@@ -1,7 +1,7 @@
 """OpenSearch index management + bulk loading for the GLEIF candidate-retrieval index.
 
 Elasticsearch is used only for candidate retrieval, never as the system of record -
-the canonical data lives in Parquet (see er.ingestion.gleif). This module builds a
+the canonical data lives in Parquet (see er.datasources.gleif.ingest). This module builds a
 deliberately narrow retrieval projection: only the fields candidate search needs.
 """
 

@@ -1,6 +1,6 @@
 """Validation checks over the processed GLEIF Parquet tables, via DuckDB.
 
-Run after ingestion (er.ingestion.gleif) to catch data-quality problems before they
+Run after ingestion (er.datasources.gleif.ingest) to catch data-quality problems before they
 propagate into search/benchmarking: malformed identifiers, unexpected duplicates,
 and how well relationships/exceptions/ISIN mappings line up with the entities table.
 

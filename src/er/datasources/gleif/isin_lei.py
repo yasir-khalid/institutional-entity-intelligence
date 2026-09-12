@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from er.config import AppConfig, load_config
-from er.ingestion.parquet_writer import ISIN_LEI_SCHEMA, BatchedParquetWriter
+from er.datasources.common.parquet_writer import BatchedParquetWriter
+from er.datasources.gleif.schema import ISIN_LEI_SCHEMA
 
 logger = logging.getLogger(__name__)
 

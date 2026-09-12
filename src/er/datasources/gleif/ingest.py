@@ -3,6 +3,11 @@
 Never loads a full XML tree into memory - the Level 1 entity file alone is ~8.4GB
 uncompressed. Uses lxml.etree.iterparse and clears each record element (and its
 now-unneeded preceding siblings) as soon as it has been consumed.
+
+Entry point: `python -m er.datasources.gleif.ingest` (or `make ingest-gleif`) runs
+all four of GLEIF's raw files (entities, relationships, exceptions, ISIN<->LEI) as
+one pipeline - see isin_lei.py for the fourth parser, kept in its own file since
+it's a plain CSV, not XML.
 """
 
 from __future__ import annotations
@@ -17,14 +22,13 @@ import duckdb
 from lxml import etree
 
 from er.config import AppConfig, load_config
-from er.ingestion.parquet_writer import (
+from er.datasources.common.parquet_writer import BatchedParquetWriter
+from er.datasources.gleif.isin_lei import parse_isin_lei
+from er.datasources.gleif.schema import (
     ENTITY_SCHEMA,
-    ISIN_LEI_SCHEMA,
     RELATIONSHIP_EXCEPTION_SCHEMA,
     RELATIONSHIP_SCHEMA,
-    BatchedParquetWriter,
 )
-from er.ingestion.isin_lei import parse_isin_lei
 from er.normalisation.addresses import (
     normalize_address_line,
     normalize_city,

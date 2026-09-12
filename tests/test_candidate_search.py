@@ -1,5 +1,5 @@
 """Integration test against the live OpenSearch index. Skipped if the index isn't
-populated yet (run er.ingestion.gleif + er.indexing.opensearch_index first)."""
+populated yet (run er.datasources.gleif.ingest + er.indexing.opensearch_index first)."""
 
 import pytest
 

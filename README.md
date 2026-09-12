@@ -18,7 +18,7 @@ cp .env.example .env     # fill in OPENSEARCH_URL
 for details; each step reads the previous step's output):
 
 ```bash
-uv run python -m er.ingestion.gleif        # raw XML/CSV -> data/processed/*.parquet (~10-15 min)
+uv run python -m er.datasources.gleif.ingest        # raw XML/CSV -> data/processed/*.parquet (~10-15 min)
 uv run python -m er.indexing.opensearch_index  # entities -> OpenSearch (~20 min)
 uv run python -m er.validation              # sanity-check the processed tables
 uv run python -m er.benchmark.generate      # data/benchmark/*.parquet (~1 sec, DuckDB)
@@ -65,17 +65,12 @@ uv run python -m er.evaluation.run_benchmark      # scores er.match against the 
 ```
 `pytest` covers every pure function (normalization, country aliases, matcher
 features/scoring/decisions/reason-building, query construction, benchmark
-generation, graph traversal) in isolation. `run_benchmark` is the integration-level
-check that has actually caught every real bug found in this project so far (see
-Phase 3/5 below) — a `pytest` pass alone does not mean the live system behaves
-correctly, since the unit tests use synthetic fixtures, not the real index.
-
-`pytest` covers every pure function (normalization, features, scoring, decisions,
-benchmark generation, graph traversal) against small synthetic fixtures — no
-OpenSearch or real data required, runs in seconds. `run_benchmark` is the
-integration-level check: it exercises the real retrieval index end-to-end and is
-how every scoring change in this project has actually been validated (see the
-`name_ratio` bug fix below, found this exact way).
+generation, graph traversal, brand-core extraction) against small synthetic
+fixtures — no OpenSearch or real data required, runs in seconds. `run_benchmark`
+is the integration-level check that has actually caught every real bug found in
+this project so far (see Phase 3/5 below, including the `name_ratio` fix) — a
+`pytest` pass alone does not mean the live system behaves correctly, since the
+unit tests never touch the real index.
 
 ## What it does
 
@@ -170,7 +165,7 @@ cp .env.example .env   # fill in OPENSEARCH_URL
 
 ```bash
 # 1. Parse GLEIF XML -> Parquet (takes a while; 3.4M entity records)
-uv run python -m er.ingestion.gleif
+uv run python -m er.datasources.gleif.ingest
 
 # 2. Create the OpenSearch index and bulk-load entities
 uv run python -m er.indexing.opensearch_index
@@ -249,7 +244,7 @@ list-typed columns, which is why `positives.parquet` stores `sample_isin`/
 ```bash
 # 1. Parse all 4 raw GLEIF files -> Parquet (re-run after Phase 1: adds isin_lei
 #    and the new entity fields; ~10-12 min end to end)
-uv run python -m er.ingestion.gleif
+uv run python -m er.datasources.gleif.ingest
 
 # 2. Validate the processed tables (uniqueness, malformed IDs, coverage, null rates)
 uv run python -m er.validation
@@ -615,6 +610,51 @@ Out of scope still: a richer structured name parser (separate `legal_form`/
 `geography`/`role_terms`/`brand_tokens` fields rather than one collapsed
 `brand_core` string) would handle more edge cases correctly, but the flat-string
 approach already passes every real example tested, including the adversarial ones
-- revisit only if a concrete new example actually breaks it. Also still open: the
-`datasources/<source>/` restructuring and SEC Form ADV ingestion the user requested
-alongside this feature - separate, larger efforts, sequenced next.
+- revisit only if a concrete new example actually breaks it. Also still open: SEC
+Form ADV ingestion (the `datasources/<source>/` restructuring it depended on is
+now done - see Phase 8 below).
+
+## Phase 8: `datasources/<source>/` restructuring + Makefile
+
+Mechanical refactor, no new data or behavior change - purely so ingestion code is
+isolated per source before a second source (SEC Form ADV) gets added. Every
+existing test still passes unchanged; this only moved files and updated imports.
+
+```
+src/er/datasources/
+├── common/
+│   └── parquet_writer.py   # BatchedParquetWriter - source-agnostic, shared
+└── gleif/
+    ├── schema.py           # GLEIF's own Parquet schemas (was ingestion/parquet_writer.py)
+    ├── ingest.py           # entities/relationships/exceptions XML parsers (was ingestion/gleif.py)
+    └── isin_lei.py         # ISIN<->LEI CSV parser (was ingestion/isin_lei.py)
+```
+
+The old `src/er/ingestion/` package is gone. `python -m er.datasources.gleif.ingest`
+replaces `python -m er.ingestion.gleif` everywhere (config, indexing, tests, docs -
+grepped for every reference before moving anything, updated all of them). The
+principle going forward: **a problem in one source's ETL can never be a problem in
+another's** - each source owns its raw-file parsing, schema, and quirks (dedup
+rules, snapshot-date extraction, ...) completely, and only the generic
+`BatchedParquetWriter` is shared.
+
+Added a root `Makefile` as the centralized trigger the user asked for - one target
+per source (`make ingest-gleif`, with a commented-out `make ingest-sec-adv`
+template showing exactly how the next source plugs in), source-agnostic shared
+steps (`make index`, `make validate`, `make benchmark`), a `make pipeline` that
+chains all of them, and `make test` / `make evaluate`. Run `make help` (or bare
+`make`) for the full list. CLIs that take runtime arguments (`er.match`,
+`er.family`, `er.hierarchy`) are intentionally not Make targets - they're listed in
+`make help`'s output as direct `uv run` commands instead.
+
+### Verify
+
+```bash
+make help                          # see all targets
+make test                          # 115 unit tests, unaffected by this refactor
+uv run python -m er.match --name "Sampo Oyj" --country FI   # live sanity check
+```
+
+Out of scope still: SEC Form ADV ingestion itself (`src/er/datasources/sec_adv/`)
+needs a decision on how to obtain the actual bulk data files before it can be
+planned concretely, and the canonical multi-source entity model.

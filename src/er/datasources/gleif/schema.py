@@ -1,16 +1,13 @@
+"""Parquet schemas for GLEIF's four raw files. Source-specific - lives here, not in
+er.datasources.common, so a schema change in GLEIF's data can never leak into
+another source's pipeline.
+"""
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 import pyarrow as pa
-import pyarrow.parquet as pq
 
-_PROVENANCE_FIELDS = [
-    ("source_file", pa.string()),
-    ("snapshot_date", pa.string()),
-    ("ingested_at", pa.string()),
-]
+from er.datasources.common.parquet_writer import PROVENANCE_FIELDS
 
 ENTITY_SCHEMA = pa.schema(
     [
@@ -52,7 +49,7 @@ ENTITY_SCHEMA = pa.schema(
         ("is_feeder", pa.bool_()),
         ("is_offshore", pa.bool_()),
         ("is_domestic", pa.bool_()),
-        *_PROVENANCE_FIELDS,
+        *PROVENANCE_FIELDS,
     ]
 )
 
@@ -66,7 +63,7 @@ RELATIONSHIP_SCHEMA = pa.schema(
         ("relationship_status", pa.string()),
         ("start_date", pa.string()),
         ("end_date", pa.string()),
-        *_PROVENANCE_FIELDS,
+        *PROVENANCE_FIELDS,
     ]
 )
 
@@ -75,7 +72,7 @@ RELATIONSHIP_EXCEPTION_SCHEMA = pa.schema(
         ("lei", pa.string()),
         ("exception_category", pa.string()),
         ("exception_reason", pa.string()),
-        *_PROVENANCE_FIELDS,
+        *PROVENANCE_FIELDS,
     ]
 )
 
@@ -83,39 +80,6 @@ ISIN_LEI_SCHEMA = pa.schema(
     [
         ("isin", pa.string()),
         ("lei", pa.string()),
-        *_PROVENANCE_FIELDS,
+        *PROVENANCE_FIELDS,
     ]
 )
-
-
-class BatchedParquetWriter:
-    """Accumulates row dicts and flushes to a Parquet file in bounded-memory batches."""
-
-    def __init__(self, path: Path, schema: pa.Schema, batch_size: int = 50_000):
-        self.path = path
-        self.schema = schema
-        self.batch_size = batch_size
-        self._rows: list[dict[str, Any]] = []
-        self._writer: pq.ParquetWriter | None = None
-        self.total_written = 0
-
-    def add(self, row: dict[str, Any]) -> None:
-        self._rows.append(row)
-        if len(self._rows) >= self.batch_size:
-            self.flush()
-
-    def flush(self) -> None:
-        if not self._rows:
-            return
-        table = pa.Table.from_pylist(self._rows, schema=self.schema)
-        if self._writer is None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._writer = pq.ParquetWriter(self.path, self.schema)
-        self._writer.write_table(table)
-        self.total_written += len(self._rows)
-        self._rows = []
-
-    def close(self) -> None:
-        self.flush()
-        if self._writer is not None:
-            self._writer.close()
