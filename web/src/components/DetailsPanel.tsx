@@ -7,6 +7,38 @@ function formatUsd(value: number | null): string {
   return `$${value.toLocaleString()}`;
 }
 
+function SkeletonBar({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded bg-slate-200 ${className}`} />;
+}
+
+function DetailsSkeleton() {
+  return (
+    <div className="flex flex-col gap-4 p-4">
+      <div>
+        <SkeletonBar className="mb-2 h-5 w-3/4" />
+        <SkeletonBar className="h-3 w-1/3" />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <SkeletonBar key={i} className="h-4 w-full" />
+        ))}
+      </div>
+      <div>
+        <SkeletonBar className="mb-2 h-4 w-24" />
+        {Array.from({ length: 3 }).map((_, i) => (
+          <SkeletonBar key={i} className="mb-1 h-4 w-full" />
+        ))}
+      </div>
+      <div>
+        <SkeletonBar className="mb-2 h-4 w-32" />
+        {Array.from({ length: 5 }).map((_, i) => (
+          <SkeletonBar key={i} className="mb-1 h-4 w-full" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function DetailsPanel({
   detail,
   loading,
@@ -17,7 +49,7 @@ export default function DetailsPanel({
   error: string | null;
 }) {
   if (loading) {
-    return <div className="p-4 text-sm text-slate-400">Loading entity...</div>;
+    return <DetailsSkeleton />;
   }
   if (error) {
     return <div className="p-4 text-sm text-red-600">{error}</div>;
