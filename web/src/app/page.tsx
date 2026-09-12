@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import SearchBar from "@/components/SearchBar";
 import ResultsList from "@/components/ResultsList";
-import EntityTree from "@/components/EntityTree";
+import TreeExplorer from "@/components/TreeExplorer";
 import DetailsPanel from "@/components/DetailsPanel";
 import {
   search,
@@ -118,13 +118,15 @@ export default function Home() {
           {rootEntityId ? (
             <>
               <h2 className="mb-2 shrink-0 text-sm font-semibold text-slate-700">
-                Relationship tree (depth {TREE_DEPTH}) - drag nodes, scroll to zoom, click for details
+                Relationship tree (depth {TREE_DEPTH}) - click any entity for details. The searched entity is
+                marked <span className="rounded bg-blue-600 px-1 py-0.5 text-[10px] font-semibold text-white">QUERY</span>;
+                the selected one is highlighted.
               </h2>
               {treeLoading && <p className="text-sm text-slate-400">Loading tree...</p>}
               {treeError && <p className="text-sm text-red-600">{treeError}</p>}
               {treeData && (
                 <div className="min-h-0 flex-1">
-                  <EntityTree data={treeData} onNodeClick={loadEntity} />
+                  <TreeExplorer data={treeData} selectedEntityId={selectedEntityId} onSelect={loadEntity} />
                 </div>
               )}
             </>

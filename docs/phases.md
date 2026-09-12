@@ -522,8 +522,8 @@ src/er/api/           # FastAPI backend - HTTP wiring + JSON shaping only
 
 web/                   # Next.js (App Router, TypeScript, Tailwind)
 ├── src/lib/api.ts      # typed fetch client, mirrors schemas.py exactly
-├── src/components/     # SearchBar, ResultsList, EntityTree (react-d3-tree
-│                         wrapper), DetailsPanel
+├── src/components/     # SearchBar, ResultsList, TreeExplorer (collapsible
+│                         indented tree list), DetailsPanel
 └── src/app/page.tsx    # wires them together - the only route
 ```
 
@@ -538,9 +538,19 @@ unchanged and converts its `HierarchyNode` tree into a frontend-friendly JSON
 shape. `/api/entity/{id}` calls `er.entity.profile.get_entity_profile()`
 unchanged.
 
-Tree rendering uses `react-d3-tree` (a popular, maintained library) rather than
-a hand-rolled D3 layout, per the same "don't rewrite a widely-used capability"
-principle the Python side already follows for libpostal/rapidfuzz/DuckDB.
+Tree rendering went through two iterations before landing on a plain
+collapsible list: first `react-d3-tree` (SVG tree layout - abandoned when
+cycle-protected duplicate nodes produced overlapping, badly-fonted labels),
+then `react-force-graph-2d` (canvas-based, force-directed/DAG graph, same
+library the referenced `lattice` repo uses - abandoned in turn once a real
+entity with 40+ funds made a canvas layout unwieldy to keep readable, and
+`dagMode` turned out to reject perfectly valid GLEIF data as an "invalid DAG"
+whenever a relationship got independently rediscovered from both ends).
+`TreeExplorer.tsx` is a plain indented, collapsible list instead - no
+extra dependency, scales to a large fan-out by simple scrolling/collapsing,
+and explicitly highlights both the originally-searched root (a blue `QUERY`
+badge) and whichever row is currently selected (blue shading), which a
+force-directed layout made harder to keep visually stable.
 
 ### Run
 
@@ -564,9 +574,7 @@ Management, 2 parents + 45 funds), and the frontend's CORS/fetch wiring works
 end to end against the live backend.
 
 Out of scope still: no automated frontend tests (manual verification only,
-given the size of this addition), no authentication on the API (loopback-only
-CORS is the only safeguard - do not deploy this API to a non-localhost address
-without adding auth first), and the tree's bidirectional (parent + child)
-layout is a simplification - `react-d3-tree` renders one root growing
-downward, so upward and downward edges are both shown as the root's direct
-children rather than visually distinguished above/below it.
+given the size of this addition, using a headless Chrome instance driven
+directly rather than guessing from screenshots), and no authentication on the
+API (loopback-only CORS is the only safeguard - do not deploy this API to a
+non-localhost address without adding auth first).
