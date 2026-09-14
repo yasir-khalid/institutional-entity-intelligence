@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import SearchBar from "@/components/SearchBar";
 import ResultsList from "@/components/ResultsList";
-import TreeGraph from "@/components/TreeGraph";
+import EntityTreeView from "@/components/EntityTreeView";
 import DetailsPanel from "@/components/DetailsPanel";
 import { ResultsSkeleton, TreeSkeleton } from "@/components/Skeletons";
 import {
@@ -22,6 +22,11 @@ export default function Home() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[] | null>(null);
+  // Distinct from `results !== null`: this flips to true the moment a search
+  // is fired and never resets, so the page commits to the results/tree
+  // layout even while the very first search is still in flight (showing its
+  // skeleton) rather than snapping back to the landing page in between.
+  const [hasSearched, setHasSearched] = useState(false);
 
   const [rootEntityId, setRootEntityId] = useState<string | null>(null);
   const [treeData, setTreeData] = useState<TreeNode | null>(null);
@@ -68,6 +73,7 @@ export default function Home() {
   );
 
   async function handleSearch(query: string, searchType: SearchType) {
+    setHasSearched(true);
     setSearching(true);
     setSearchError(null);
     setResults(null);
@@ -92,15 +98,33 @@ export default function Home() {
 
   const showResultsPicker = results && results.length > 1;
 
+  if (!hasSearched) {
+    // Search-first landing page, like a search engine homepage - no
+    // results/tree/details chrome until the user has actually searched for
+    // something.
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-6 bg-white px-6">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-slate-900">Institutional Entity Intelligence</h1>
+          <p className="mt-2 text-sm text-slate-500">
+            Search a name, LEI, or security ID (CUSIP) to explore the GLEIF relationship tree and SEC 13F activity.
+          </p>
+        </div>
+        <div className="w-full max-w-xl">
+          <SearchBar onSearch={handleSearch} loading={searching} />
+          {searchError && <p className="mt-2 text-sm text-red-600">{searchError}</p>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-white">
-      <header className="shrink-0 border-b border-slate-200 px-6 py-4">
-        <h1 className="text-xl font-bold text-slate-900">Institutional Entity Intelligence</h1>
-        <p className="mb-3 text-xs text-slate-500">
-          Search a name, LEI, or security ID (CUSIP) to explore the GLEIF relationship tree and SEC 13F activity.
-        </p>
-        <SearchBar onSearch={handleSearch} loading={searching} />
-        {searchError && <p className="mt-2 text-sm text-red-600">{searchError}</p>}
+      <header className="shrink-0 border-b border-slate-200 px-6 py-3">
+        <div className="mx-auto flex max-w-2xl flex-col gap-1">
+          <SearchBar onSearch={handleSearch} loading={searching} />
+          {searchError && <p className="text-sm text-red-600">{searchError}</p>}
+        </div>
       </header>
 
       {searching && (
@@ -129,8 +153,8 @@ export default function Home() {
           {rootEntityId ? (
             <>
               <h2 className="mb-2 shrink-0 text-sm font-semibold text-slate-700">
-                Relationship tree (depth {TREE_DEPTH}) - drag to pan, scroll to zoom, click a card for details,
-                use the ± toggle to collapse a branch.
+                Relationship tree (depth {TREE_DEPTH}) - click a card for details, use the ▾/▸ toggle to
+                expand or collapse a branch.
               </h2>
               {treeError && <p className="text-sm text-red-600">{treeError}</p>}
               {treeLoading ? (
@@ -138,7 +162,7 @@ export default function Home() {
               ) : (
                 treeData && (
                   <div className="min-h-0 flex-1">
-                    <TreeGraph
+                    <EntityTreeView
                       key={rootEntityId}
                       data={treeData}
                       selectedEntityId={selectedEntityId}
@@ -150,7 +174,7 @@ export default function Home() {
             </>
           ) : (
             <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-400">
-              Search above to get started.
+              Pick a result above to explore its relationship tree.
             </div>
           )}
         </div>

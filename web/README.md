@@ -23,20 +23,23 @@ a separate pipeline.
 
 ## How to use it
 
-1. Type a query into the search bar and pick what it is: **Name**, **LEI**, or
+1. The landing page is search-first, like a search engine homepage - just a
+   centered search bar, nothing else, until you actually search for
+   something. Type a query and pick what it is: **Name**, **LEI**, or
    **Security ID (CUSIP)**.
 2. A single unambiguous result (or a confident `AUTO_MATCH`) jumps straight to
-   the relationship tree; otherwise pick one from the results list.
-3. The tree renders as a top-down org chart (rounded-corner cards, auto-laid
-   out with `dagre`) - parent/manager cards have a green top border, fund/
-   subsidiary cards a purple one. Parents expand one hop deeper than children
-   by default (ownership chains up to an ultimate parent are usually short
-   and worth seeing in full). Only the root's direct neighbors are expanded
-   on first load; every card with children has a **+/−** toggle to expand or
-   collapse just that branch, independent of its siblings. The originally-
-   searched entity always carries a blue **QUERY** badge; whichever entity is
-   currently selected (loaded in the details panel) gets a blue ring - both
-   can be the same card, or different once you click into a relative.
+   the relationship tree; otherwise pick one from the results list that
+   appears below the search bar.
+3. The tree renders as a simple indented list - deliberately not a
+   node-and-edge graph - with rounded chip cards connected by plain vertical
+   guide lines, closer to a file-explorer tree than a diagramming tool.
+   Parent/manager cards have a green left border, fund/subsidiary cards a
+   purple one. Only the root's direct neighbors are expanded on first load;
+   every card with children has a **▾/▸** toggle to expand or collapse just
+   that branch, independent of its siblings. The originally-searched entity
+   always carries a blue **QUERY** badge; whichever entity is currently
+   selected (loaded in the details panel) gets a blue ring - both can be the
+   same card, or different once you click into a relative.
 4. Click any card to load its full profile - identifiers, GLEIF status, and
    (when resolved as a filer) its latest SEC 13F reported holdings - into the
    right-hand panel. Every loading state (search results, the tree, the
@@ -46,25 +49,41 @@ a separate pipeline.
 
 ```
 src/
-├── app/page.tsx              # the only route - search + tree + details, wired together
+├── app/page.tsx              # the only route - landing search page, then
+│                                search + tree + details once you've searched
 ├── components/
 │   ├── SearchBar.tsx          # query input + Name/LEI/CUSIP toggle
 │   ├── ResultsList.tsx        # ambiguous-search result picker
-│   ├── TreeGraph.tsx          # flattens TreeNode into a spanning tree, lays it out
-│   │                            with dagre, manages per-node collapse state
-│   ├── EntityNode.tsx         # the rounded-corner card React Flow renders per entity
+│   ├── EntityTreeView.tsx     # rebuilds the API tree into a proper spanning
+│   │                            tree, renders it as a plain indented list
+│   │                            with per-branch collapse state
 │   ├── Skeletons.tsx          # shared loading placeholders (Bar/ResultsSkeleton/TreeSkeleton)
 │   └── DetailsPanel.tsx       # renders EntityDetail JSON
 └── lib/api.ts                 # typed fetch client - mirrors src/er/api/schemas.py exactly
 ```
 
-Two earlier versions were tried and dropped: `react-d3-tree` (SVG tree -
-cycle-protected duplicate nodes produced overlapping, badly-fonted labels) and
-a plain collapsible indented list (correct and simple, but didn't match how
-real corporate-structure tools like Moody's Orbis present ownership - a
-top-down org chart). The current version (`@xyflow/react` + `dagre`) is
-closer to that standard shape while keeping the same per-branch collapse
-behavior. It also exposed a real backend bug: rendering every node as its own
-DOM element up front meant a hub-heavy real entity's true fan-out (1,111
-nodes at the old default) had to be capped much more aggressively than the
-CLI ever needed - see `docs/phases.md` Phase 13 for the numbers.
+## Design history
+
+Three tree visualizations were tried, in order, each replaced for a concrete
+reason found by testing against real data (not aesthetic preference alone) -
+see `docs/phases.md` Phases 13-15 for the full account:
+
+1. `react-d3-tree` (SVG tree) - cycle-protected duplicate nodes produced
+   overlapping, badly-fonted labels.
+2. `react-force-graph-2d` (canvas, force-directed/DAG) - became unreadable for
+   a real entity with 40+ funds, and `dagMode` rejected perfectly valid GLEIF
+   data as an "invalid DAG" whenever a relationship was independently
+   rediscovered from both ends.
+3. `@xyflow/react` + `dagre` (canvas org chart, auto-layout) - closer to how
+   tools like Moody's Orbis present ownership, but still a full graph-diagram
+   library (pan/zoom/drag/minimap) for what is, in this product, always
+   fundamentally a tree.
+
+The current version drops the graph-diagram paradigm entirely: a plain
+indented list (`EntityTreeView.tsx`), no canvas, no diagramming library. It
+scales to a large fan-out by simple scroll/collapse and needs no extra
+dependency. Every version was built on the same spanning-tree fix (one parent
+edge per entity, first-discovery wins) - without it, collapsing one node could
+transitively hide unrelated siblings reached through a GLEIF cross-reference
+(confirmed live: ~35 of ~47 top-level entities disappeared on one real
+entity's tree until this was fixed).

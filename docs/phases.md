@@ -637,3 +637,35 @@ curl "http://localhost:8000/api/entity/549300TITGLG7BXCGB39/tree?depth=2" | \
 Confirmed live with a real headless Chrome driven through the actual search
 -> expand -> collapse flow (not just TypeScript/build checks), including the
 specific expand/collapse scenario that exposed the spanning-tree bug.
+
+## Phase 15: search-first landing page, plain indented tree (drop the graph library)
+
+Two changes, both simplifications:
+
+1. **Landing page is search-first.** `page.tsx` now renders a minimal,
+   centered search bar (title + subtitle + input, nothing else) until the
+   user actually searches for something - like a search engine homepage -
+   rather than the full results/tree/details chrome being visible (empty)
+   from the first load.
+2. **Dropped the graph-diagram library entirely.** `@xyflow/react` + `dagre`
+   (Phase 14's org chart) is gone, replaced by `EntityTreeView.tsx`: a plain
+   indented list with vertical guide lines, rounded chip cards, and a
+   ▾/▸ toggle per branch - no canvas, no pan/zoom/drag, no auto-layout
+   engine. The product's tree is always fundamentally a tree, not a general
+   graph, and a plain list needs no extra dependency and cannot suffer a
+   diagramming library's own layout/DAG-validity concerns (see Phase 14's
+   `dagMode` bug for a concrete example of that risk). The same
+   spanning-tree fix from Phase 14 (one parent edge per entity,
+   first-discovery wins) carried over unchanged into the new component.
+
+### Verify
+
+```bash
+cd web && npx tsc --noEmit && npm run build   # clean
+```
+
+Confirmed live with a real headless Chrome: the landing page shows only the
+centered search bar before any search, a name/LEI/CUSIP search transitions to
+the results+tree+details layout, and expanding one branch of the tree
+(screenshotted at `/tmp/tree.png` during verification) reveals only that
+branch's own children while all sibling cards stay untouched.
