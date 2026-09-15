@@ -33,24 +33,24 @@ export default function SearchBar({
 
   const field = (
       <div
-        className={`group flex w-full min-w-0 items-center rounded-xl border border-slate-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-4 focus-within:ring-indigo-50 ${
+        className={`group border-line bg-surface focus-within:border-accent focus-within:ring-accent-soft flex w-full min-w-0 items-center rounded-xl border shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition-all focus-within:ring-4 ${
           hero ? "h-13 pl-4 pr-1.5" : "h-10 pl-3 pr-1"
         }`}
       >
-        <Search className={`shrink-0 text-slate-400 ${hero ? "h-[18px] w-[18px]" : "h-4 w-4"}`} strokeWidth={2} />
+        <Search className={`text-ink-subtle shrink-0 ${hero ? "h-[18px] w-[18px]" : "h-4 w-4"}`} strokeWidth={2} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={active.placeholder}
           aria-label={`Search by ${active.label}`}
-          className={`min-w-0 flex-1 bg-transparent px-3 text-slate-900 outline-none placeholder:text-slate-400 ${
+          className={`text-ink placeholder:text-ink-subtle min-w-0 flex-1 bg-transparent px-3 outline-none ${
             hero ? "text-[15px]" : "text-[13px]"
           } ${searchType === "name" ? "" : "font-mono tracking-tight"}`}
         />
         <button
           type="submit"
           disabled={loading || !query.trim()}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 ${
+          className={`bg-accent hover:bg-accent-strong disabled:bg-canvas disabled:text-ink-subtle inline-flex shrink-0 items-center gap-1.5 rounded-lg font-medium text-white transition-colors disabled:cursor-not-allowed ${
             hero ? "h-10 px-4 text-[13px]" : "h-8 px-3 text-[12px]"
           }`}
         >
@@ -68,7 +68,7 @@ export default function SearchBar({
     <div
       role="tablist"
       aria-label="Search type"
-      className={`inline-flex shrink-0 items-center rounded-xl bg-slate-100 ${hero ? "h-9 p-1" : "h-10 p-1"}`}
+      className={`bg-canvas inline-flex shrink-0 items-center rounded-xl ${hero ? "h-9 p-1" : "h-10 p-1"}`}
     >
       {TOGGLES.map((t) => {
         const selected = searchType === t.value;
@@ -80,7 +80,7 @@ export default function SearchBar({
             aria-selected={selected}
             onClick={() => setSearchType(t.value)}
             className={`flex h-full items-center rounded-lg px-3 text-[12px] font-medium transition-all ${
-              selected ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              selected ? "bg-surface text-ink shadow-[0_1px_2px_rgba(15,23,42,0.08)]" : "text-ink-subtle hover:text-ink"
             }`}
           >
             {t.label}

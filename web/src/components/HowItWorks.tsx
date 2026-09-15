@@ -48,7 +48,7 @@ export default function HowItWorks() {
             centre-to-centre of the first and last step. */}
         <div className="pointer-events-none absolute top-[22px] right-[12.5%] left-[12.5%] h-px overflow-hidden">
           <div
-            className="h-px w-full origin-left bg-gradient-to-r from-slate-200 via-slate-200 to-slate-200 transition-transform duration-[900ms] ease-out"
+            className="via-line to-line from-line h-px w-full origin-left bg-gradient-to-r transition-transform duration-[900ms] ease-out"
             style={{ transform: drawn ? "scaleX(1)" : "scaleX(0)" }}
           />
         </div>
@@ -67,10 +67,10 @@ export default function HowItWorks() {
                   className="group flex flex-col items-center gap-2.5 outline-none"
                 >
                   <span
-                    className={`flex h-11 w-11 items-center justify-center rounded-xl border bg-white transition-all duration-200 ${
+                    className={`bg-surface flex h-11 w-11 items-center justify-center rounded-xl border transition-all duration-200 ${
                       isActive
-                        ? "border-indigo-200 text-indigo-600 shadow-[0_0_0_4px_rgb(238_242_255)]"
-                        : "border-slate-200 text-slate-400 group-hover:border-slate-300 group-hover:text-slate-500"
+                        ? "border-accent/35 text-accent shadow-[0_0_0_4px_var(--color-accent-soft)]"
+                        : "border-line text-ink-subtle group-hover:border-ink-faint group-hover:text-ink-muted"
                     }`}
                   >
                     <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} />
@@ -78,14 +78,14 @@ export default function HowItWorks() {
                   <span className="flex flex-col items-center gap-0.5">
                     <span
                       className={`text-[10px] font-semibold tabular transition-colors ${
-                        isActive ? "text-indigo-400" : "text-slate-300"
+                        isActive ? "text-accent/70" : "text-ink-faint"
                       }`}
                     >
                       {String(i + 1).padStart(2, "0")}
                     </span>
                     <span
                       className={`text-[13px] font-medium transition-colors ${
-                        isActive ? "text-slate-900" : "text-slate-500"
+                        isActive ? "text-ink" : "text-ink-muted"
                       }`}
                     >
                       {step.title}
@@ -100,7 +100,7 @@ export default function HowItWorks() {
 
       {/* Fixed height so swapping descriptions never shifts the page. */}
       <div className="mx-auto mt-5 flex h-9 max-w-md items-start justify-center">
-        <p key={active} className="animate-fade-in text-center text-[12.5px] leading-relaxed text-slate-500">
+        <p key={active} className="animate-fade-in text-ink-muted text-center text-[12.5px] leading-relaxed">
           {STEPS[active].desc}
         </p>
       </div>

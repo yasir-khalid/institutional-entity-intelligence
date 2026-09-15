@@ -779,3 +779,53 @@ render (headless Chrome driving the running dev server):
 cd web && npx tsc --noEmit && npm run build   # both clean
 make api && cd web && npm run dev             # then compare against the screens above
 ```
+
+---
+
+## Phase 18: colour tokens, readable contrast, and a "why this matters" drawer
+
+Phase 17 fixed alignment and typography but left the palette thin: labels were
+`slate-400` and identifiers `slate-300`, which measure ~2.5:1 and ~1.9:1 on
+white. The UI read as dim on a laptop screen, and the fixed 400px details pane
+stranded a lot of whitespace on a 1920 display.
+
+### Named tokens instead of per-component slates
+
+`globals.css` now declares the palette once, as Tailwind v4 `@theme` tokens,
+and every component references the role rather than a shade:
+
+- Text is a four-step ramp - `ink` (16.8:1, names and values), `ink-muted`
+  (10.9:1, body), `ink-subtle` (6.0:1, labels/captions/identifiers),
+  `ink-faint` (2.6:1, **decoration only** - rules, inactive dots, never text).
+- Ground: `canvas`, `surface`, `line`, `line-soft`.
+- Meaning: `accent`/`accent-strong`/`accent-soft`, plus `upward` (parent) and
+  `downward` (subsidiary/fund), deepened from 500 to 700-weight hues so they
+  hold up against white.
+
+Badge variants moved to 700/800 text on a 50 fill with a 300 ring - the old
+600-on-50 combination was legible in isolation and washed out in a row of
+them. A `grep` for `slate-300|slate-400` in `web/src` now returns one
+deliberate hit (the neutral badge).
+
+### Layout
+
+- The details pane is fluid: `w-[clamp(25rem,30vw,34rem)]` instead of a fixed
+  `400px`, so a wide screen gives it real room instead of leaving the tree
+  pane mostly empty.
+
+### "Why this matters" drawer (`WhyItMatters.tsx`)
+
+A floating trigger on the landing page opens a right-hand drawer arguing the
+product's actual thesis - an agent is only as reliable as the entity layer
+underneath it - across five topics: entity resolution, identifiers, hierarchy,
+lineage, provenance. Each carries a concrete example, and the two that make
+quantitative claims cite measured results from `experiments/` (Recall@20
+74.9% -> 88.35%; master/feeder dangerous-failure 26.1% -> 0.0%, precision
+53.9% -> 100%) rather than adjectives. Escape and backdrop-click close it, body
+scroll is locked while open, and focus returns to the trigger.
+
+### Verify
+
+```bash
+cd web && npx tsc --noEmit && npm run build   # both clean
+```

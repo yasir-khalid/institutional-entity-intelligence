@@ -11,21 +11,24 @@ import type { ReactNode } from "react";
 /** The one section heading treatment used across the app. */
 export function SectionLabel({ children, icon }: { children: ReactNode; icon?: ReactNode }) {
   return (
-    <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+    <div className="text-ink-subtle flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.08em] uppercase">
       {icon}
       {children}
     </div>
   );
 }
 
+/* Each variant is a tinted surface + a same-hue text colour dark enough to
+   read on it (700/800, not 600) + a ring one step stronger than the fill, so
+   badges hold their shape against both white cards and the canvas. */
 const BADGE_VARIANTS = {
-  neutral: "bg-slate-100 text-slate-600 ring-slate-200",
-  accent: "bg-indigo-50 text-indigo-700 ring-indigo-200",
-  positive: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-  caution: "bg-amber-50 text-amber-700 ring-amber-200",
-  critical: "bg-rose-50 text-rose-700 ring-rose-200",
-  upward: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-  downward: "bg-violet-50 text-violet-700 ring-violet-200",
+  neutral: "bg-slate-100 text-slate-700 ring-slate-300/70",
+  accent: "bg-indigo-50 text-indigo-700 ring-indigo-300/70",
+  positive: "bg-emerald-50 text-emerald-800 ring-emerald-300/70",
+  caution: "bg-amber-50 text-amber-800 ring-amber-300/70",
+  critical: "bg-rose-50 text-rose-700 ring-rose-300/70",
+  upward: "bg-emerald-50 text-emerald-800 ring-emerald-300/70",
+  downward: "bg-violet-50 text-violet-800 ring-violet-300/70",
 } as const;
 
 export type BadgeVariant = keyof typeof BADGE_VARIANTS;
@@ -59,8 +62,8 @@ export function Mono({ children, className = "" }: { children: ReactNode; classN
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
-      <dt className="text-[12px] text-slate-500">{label}</dt>
-      <dd className="text-[12px] font-medium text-slate-900">{children}</dd>
+      <dt className="text-ink-subtle text-[12px]">{label}</dt>
+      <dd className="text-ink text-[12.5px] font-medium">{children}</dd>
     </>
   );
 }

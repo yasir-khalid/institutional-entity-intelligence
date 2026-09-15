@@ -25,7 +25,7 @@ export default function ResultsList({
 }) {
   if (results.length === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-dashed border-slate-200 px-4 py-6 text-[13px] text-slate-400">
+      <div className="border-line text-ink-subtle flex items-center gap-2 rounded-lg border border-dashed px-4 py-6 text-[13px]">
         <AlertCircle className="h-4 w-4" strokeWidth={1.75} />
         No entities matched that query.
       </div>
@@ -33,7 +33,7 @@ export default function ResultsList({
   }
 
   return (
-    <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <ul className="divide-line-soft border-line bg-surface divide-y overflow-hidden rounded-xl border">
       {results.map((r) => {
         const unresolved = r.entity_id.startsWith("unresolved-cik-");
         return (
@@ -41,29 +41,29 @@ export default function ResultsList({
             <button
               onClick={() => onSelect(r.entity_id)}
               disabled={unresolved}
-              className="group flex h-11 w-full items-center gap-3 px-3.5 text-left transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+              className="group hover:bg-canvas/60 flex h-11 w-full items-center gap-3 px-3.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
             >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-400 transition-colors group-hover:bg-indigo-50 group-hover:text-indigo-500 group-disabled:group-hover:bg-slate-100 group-disabled:group-hover:text-slate-400">
+              <span className="bg-canvas text-ink-subtle group-hover:bg-accent-soft group-hover:text-accent group-disabled:group-hover:bg-canvas group-disabled:group-hover:text-ink-subtle flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors">
                 <Building2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               </span>
 
               {/* Columns, not a stacked block: the identifier and jurisdiction
                   line up down the list so the eye can scan one field at a time
                   across ten near-identical legal names. */}
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900">
+              <span className="text-ink min-w-0 flex-1 truncate text-[13px] font-medium">
                 {r.canonical_name}
               </span>
 
               {unresolved ? (
-                <span className="shrink-0 text-[11px] text-slate-400">
+                <span className="text-ink-subtle shrink-0 text-[11px]">
                   CIK {r.cik} · not resolved to a GLEIF LEI
                 </span>
               ) : (
                 <>
-                  <span className="hidden w-14 shrink-0 text-[11.5px] text-slate-500 sm:block">
+                  <span className="text-ink-muted hidden w-14 shrink-0 text-[11.5px] sm:block">
                     {r.jurisdiction ?? "—"}
                   </span>
-                  <Mono className="hidden w-[13.5rem] shrink-0 text-slate-400 md:block">{r.entity_id}</Mono>
+                  <Mono className="text-ink-subtle hidden w-[13.5rem] shrink-0 md:block">{r.entity_id}</Mono>
                 </>
               )}
 
@@ -78,7 +78,7 @@ export default function ResultsList({
               )}
 
               <ChevronRight
-                className="h-4 w-4 shrink-0 text-slate-300 transition-colors group-hover:text-slate-400"
+                className="text-ink-faint group-hover:text-ink-subtle h-4 w-4 shrink-0 transition-colors"
                 strokeWidth={2}
               />
             </button>

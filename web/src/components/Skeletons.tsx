@@ -3,7 +3,7 @@
 import type { CSSProperties } from "react";
 
 export function Bar({ className = "", style }: { className?: string; style?: CSSProperties }) {
-  return <div style={style} className={`animate-pulse rounded bg-slate-100 ${className}`} />;
+  return <div style={style} className={`bg-canvas animate-pulse rounded ${className}`} />;
 }
 
 /** Mirrors ResultsList's row geometry exactly - 44px rows, icon tile, name,
@@ -11,7 +11,7 @@ export function Bar({ className = "", style }: { className?: string; style?: CSS
  * shift anything on the page. */
 export function ResultsSkeleton() {
   return (
-    <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <ul className="divide-line-soft border-line bg-surface divide-y overflow-hidden rounded-xl border">
       {Array.from({ length: 4 }).map((_, i) => (
         <li key={i} className="flex h-11 items-center gap-3 px-3.5">
           <Bar className="h-7 w-7 shrink-0 rounded-md" />

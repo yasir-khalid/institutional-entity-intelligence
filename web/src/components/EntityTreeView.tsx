@@ -47,9 +47,9 @@ function toSpanningTree(root: TreeNode): SpanningNode {
 }
 
 function DirectionIcon({ direction, isRoot }: { direction: SpanningNode["direction"]; isRoot: boolean }) {
-  if (isRoot) return <Circle className="h-3 w-3 fill-indigo-500 text-indigo-500" strokeWidth={0} />;
-  if (direction === "upward") return <ArrowUp className="h-3.5 w-3.5 text-emerald-600" strokeWidth={2.25} />;
-  return <ArrowDown className="h-3.5 w-3.5 text-violet-500" strokeWidth={2.25} />;
+  if (isRoot) return <Circle className="fill-accent text-accent h-3 w-3" strokeWidth={0} />;
+  if (direction === "upward") return <ArrowUp className="text-upward h-3.5 w-3.5" strokeWidth={2.25} />;
+  return <ArrowDown className="text-downward h-3.5 w-3.5" strokeWidth={2.25} />;
 }
 
 function Branch({
@@ -74,17 +74,17 @@ function Branch({
     <div>
       <div
         className={`group relative flex h-9 items-center gap-1 rounded-md pr-2 transition-colors ${
-          isSelected ? "bg-indigo-50" : "hover:bg-slate-50"
+          isSelected ? "bg-accent-soft" : "hover:bg-canvas/70"
         }`}
       >
-        {isSelected && <span className="absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-full bg-indigo-500" />}
+        {isSelected && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-accent" />}
 
         <button
           type="button"
           onClick={() => hasChildren && setExpanded((v) => !v)}
           aria-label={hasChildren ? (expanded ? "Collapse" : "Expand") : undefined}
           disabled={!hasChildren}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-600 disabled:pointer-events-none disabled:opacity-0"
+          className="text-ink-subtle hover:bg-line hover:text-ink flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors disabled:pointer-events-none disabled:opacity-0"
         >
           {expanded ? (
             <ChevronDown className="h-3.5 w-3.5" strokeWidth={2.25} />
@@ -104,7 +104,7 @@ function Branch({
 
           <span
             className={`truncate text-[13px] ${
-              node.isRoot ? "font-semibold text-slate-900" : isSelected ? "font-medium text-slate-900" : "text-slate-700"
+              node.isRoot ? "text-ink font-semibold" : isSelected ? "text-ink font-medium" : "text-ink-muted"
             }`}
             title={node.name}
           >
@@ -112,7 +112,7 @@ function Branch({
           </span>
 
           {node.label && (
-            <span className="hidden shrink-0 text-[11px] text-slate-400 sm:inline">{node.label}</span>
+            <span className="text-ink-subtle hidden shrink-0 text-[11px] sm:inline">{node.label}</span>
           )}
 
           {node.isRoot && (
@@ -121,7 +121,7 @@ function Branch({
             </Badge>
           )}
 
-          <Mono className="ml-auto hidden shrink-0 pl-3 text-slate-300 group-hover:text-slate-400 lg:inline">
+          <Mono className="text-ink-subtle group-hover:text-ink-muted ml-auto hidden shrink-0 pl-3 transition-colors lg:inline">
             {node.id}
           </Mono>
         </button>
@@ -130,7 +130,7 @@ function Branch({
       {expanded && hasChildren && (
         // Indent guide: one continuous hairline per level, so depth is legible
         // at a glance without needing to count indentation by eye.
-        <div className="ml-[9px] border-l border-slate-150 pl-3" style={{ borderColor: "rgb(226 232 240)" }}>
+        <div className="border-line ml-[9px] border-l pl-3">
           {node.children.map((child) => (
             <Branch
               key={child.id}

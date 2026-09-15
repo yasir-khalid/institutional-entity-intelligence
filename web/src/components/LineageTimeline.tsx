@@ -25,26 +25,26 @@ export default function LineageTimeline({ lineage }: { lineage: EntityLineage | 
   ];
 
   return (
-    <div className="rounded-xl border border-slate-200 px-4 py-3.5">
+    <div className="border-line bg-canvas/40 rounded-xl border px-4 py-3.5">
       <div className="relative">
-        <div className="absolute top-[3px] right-[12.5%] left-[12.5%] h-px bg-slate-200" />
+        <div className="bg-line absolute top-[3px] right-[12.5%] left-[12.5%] h-px" />
         <ol className="relative flex">
           {points.map((p) => (
             <li key={p.label} className="flex flex-1 flex-col items-center gap-1.5 text-center">
               <span
                 className={`h-[7px] w-[7px] rounded-full ring-2 ring-white ${
-                  p.value ? "bg-indigo-500" : "bg-slate-300"
+                  p.value ? "bg-accent" : "bg-ink-faint"
                 }`}
               />
-              <span className="text-[9px] font-semibold tracking-[0.06em] text-slate-400 uppercase">{p.label}</span>
-              <span className="tabular text-[11px] text-slate-700">{formatDate(p.value)}</span>
+              <span className="text-ink-subtle text-[9.5px] font-semibold tracking-[0.06em] uppercase">{p.label}</span>
+              <span className="tabular text-ink-muted text-[11.5px] font-medium">{formatDate(p.value)}</span>
             </li>
           ))}
         </ol>
       </div>
 
       {lineage.gleif_snapshot_date && (
-        <p className="mt-3.5 border-t border-slate-100 pt-2.5 text-[10.5px] text-slate-400">
+        <p className="border-line-soft text-ink-subtle mt-3.5 border-t pt-2.5 text-[11px]">
           GLEIF snapshot {formatDate(lineage.gleif_snapshot_date)}
         </p>
       )}

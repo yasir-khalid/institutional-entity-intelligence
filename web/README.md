@@ -50,6 +50,12 @@ a separate pipeline.
    reported holdings. Every loading state shows a skeleton that mirrors the
    real layout's geometry rather than a blank screen or a spinner.
 
+The landing page also carries a floating **Why this matters** button, which
+opens a drawer explaining what entity resolution, identifiers, hierarchy,
+lineage and provenance each buy you when an agent is consuming this data -
+with the measured before/after numbers from `experiments/` rather than
+assertions.
+
 ## Structure
 
 ```
@@ -65,6 +71,8 @@ src/
 │   │                            for type scale, badge colours and label style
 │   ├── SearchBar.tsx          # query input + Name/LEI/CUSIP segmented control
 │   ├── HowItWorks.tsx         # landing-page connected step flow
+│   ├── WhyItMatters.tsx       # floating trigger + explainer drawer: why an
+│   │                            entity layer matters for agent context
 │   ├── ResultsList.tsx        # ambiguous-search result picker (aligned columns)
 │   ├── EntityTreeView.tsx     # rebuilds the API tree into a proper spanning
 │   │                            tree, renders it as a plain indented list
@@ -83,14 +91,20 @@ Deliberately small, so the UI stays coherent without a component library:
   identifiers (LEI, CIK, CUSIP). Every figure that a reader might compare down
   a column - dates, counts, dollar values, IDs - carries `.tabular`
   (`font-variant-numeric: tabular-nums`) so digits line up.
-- **Colour**: one accent (indigo) for selection, focus and the query marker;
-  two semantic hues that mean direction, not decoration (emerald = upward /
-  parent, violet = downward / subsidiary / fund); slate for everything else;
-  amber and rose reserved for caveats and errors.
+- **Colour**: named tokens in `globals.css`, not per-component slates. Text is
+  a four-step ramp - `ink` (headings, values), `ink-muted` (body), `ink-subtle`
+  (labels, identifiers), `ink-faint` (decoration only, never text) - and every
+  text step clears WCAG AA on `surface`. One accent (indigo) carries selection,
+  focus and the query marker; two semantic hues mean direction, not decoration
+  (`upward` = parent/manager, `downward` = subsidiary/fund); amber and rose are
+  reserved for caveats and errors.
 - **Icons**: `lucide-react` throughout - no emoji anywhere in the UI.
 - **Alignment**: the tree and details panes are cards with identical 44px
   header bars, so their frames, headings and content start on the same
-  baseline; label/value pairs use one shared `FieldGrid` column width.
+  baseline; label/value pairs use one shared `FieldGrid` column width. The
+  details pane is fluid (`clamp(25rem, 30vw, 34rem)`) so a wide screen gives it
+  real room rather than stranding it at a fixed width beside a mostly-empty
+  tree.
 
 ## Design history
 

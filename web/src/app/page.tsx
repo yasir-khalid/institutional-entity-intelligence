@@ -7,6 +7,7 @@ import ResultsList from "@/components/ResultsList";
 import EntityTreeView from "@/components/EntityTreeView";
 import DetailsPanel from "@/components/DetailsPanel";
 import HowItWorks from "@/components/HowItWorks";
+import WhyItMatters from "@/components/WhyItMatters";
 import { ResultsSkeleton, TreeSkeleton } from "@/components/Skeletons";
 import { SectionLabel } from "@/components/ui";
 import {
@@ -26,14 +27,14 @@ function Wordmark({ size = "default" }: { size?: "default" | "hero" }) {
   return (
     <div className="flex items-center gap-2.5">
       <span
-        className={`flex items-center justify-center rounded-lg bg-slate-900 text-white ${
+        className={`bg-ink flex items-center justify-center rounded-lg text-white ${
           hero ? "h-9 w-9" : "h-7 w-7"
         }`}
       >
         <Waypoints className={hero ? "h-[18px] w-[18px]" : "h-3.5 w-3.5"} strokeWidth={1.75} />
       </span>
       <span
-        className={`font-semibold tracking-[-0.015em] text-slate-900 ${hero ? "text-[19px]" : "text-[14px]"}`}
+        className={`text-ink font-semibold tracking-[-0.015em] ${hero ? "text-[19px]" : "text-[14px]"}`}
       >
         Institutional Entity Intelligence
       </span>
@@ -121,12 +122,12 @@ export default function Home() {
 
   if (!hasSearched) {
     return (
-      <div className="scroll-thin flex min-h-screen flex-col overflow-y-auto bg-white">
+      <div className="scroll-thin bg-surface flex min-h-screen flex-col overflow-y-auto">
         <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center gap-12 px-6 py-20">
           <div className="flex w-full flex-col items-center gap-7">
             <div className="animate-fade-in-up flex flex-col items-center gap-3 text-center">
               <Wordmark size="hero" />
-              <p className="max-w-md text-[13.5px] leading-relaxed text-slate-500">
+              <p className="text-ink-muted max-w-md text-[13.5px] leading-relaxed">
                 Resolve a fund or manager to its legal entity, then explore its ownership structure and SEC filing
                 activity.
               </p>
@@ -147,15 +148,20 @@ export default function Home() {
             <HowItWorks />
           </div>
         </div>
+
+        {/* "How it works" answers what the product does; this answers why any
+            of it is worth doing. Landing page only - once you're working, the
+            data itself makes the argument. */}
+        <WhyItMatters />
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-50">
+    <div className="bg-canvas flex h-screen w-screen flex-col overflow-hidden">
       {/* Three equal-weight columns so the search bar is optically centred in
           the viewport regardless of how wide the wordmark renders. */}
-      <header className="z-10 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-6 border-b border-slate-200 bg-white px-5 py-3">
+      <header className="border-line bg-surface z-10 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-6 border-b px-5 py-3">
         <button
           type="button"
           onClick={() => setHasSearched(false)}
@@ -178,7 +184,7 @@ export default function Home() {
       )}
 
       {!workspaceActive && (searching || results !== null) && (
-        <main className="scroll-thin min-h-0 flex-1 overflow-y-auto bg-white px-5 pt-4 pb-6">
+        <main className="scroll-thin bg-surface min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-6">
           <div className="mb-2.5">
             <SectionLabel>{searching ? "Searching" : `${results?.length ?? 0} results`}</SectionLabel>
           </div>
@@ -192,7 +198,7 @@ export default function Home() {
         // name can return 10+ legal entities) grows until it squeezes the
         // workspace below it to zero height, making the tree and details
         // invisible even though they rendered.
-        <div className="relative shrink-0 border-b border-slate-200 bg-white">
+        <div className="border-line bg-surface relative shrink-0 border-b">
           <div className="scroll-thin max-h-[13.5rem] overflow-y-auto px-5 pt-3.5 pb-5">
             <div className="mb-2.5">
               <SectionLabel>{searching ? "Searching" : `${results?.length ?? 0} results`}</SectionLabel>
@@ -201,26 +207,26 @@ export default function Home() {
           </div>
           {/* Fades the last visible row instead of slicing it flat, so it reads
               as "more below" rather than as a clipping bug. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent" />
+          <div className="from-surface pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t to-transparent" />
         </div>
       )}
 
       {/* Both panes are cards with an identical 44px titled header bar, so
           their frames, headers and content areas start on the same baseline. */}
       <main className={`min-h-0 flex-1 gap-4 p-4 ${workspaceActive ? "flex" : "hidden"}`}>
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4">
+        <section className="border-line bg-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl shadow-[0_1px_2px_rgba(15,23,42,0.04)] ring-1 ring-transparent">
+          <div className="border-line-soft flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4">
             <SectionLabel icon={<Network className="h-3 w-3" strokeWidth={2} />}>
               Relationship tree · depth {TREE_DEPTH}
             </SectionLabel>
             {rootEntityId && !treeLoading && (
-              <div className="flex items-center gap-3.5 text-[10.5px] text-slate-400">
+              <div className="text-ink-subtle flex items-center gap-3.5 text-[11px]">
                 <span className="flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  <span className="bg-upward h-1.5 w-1.5 rounded-full" />
                   Parent
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+                  <span className="bg-downward h-1.5 w-1.5 rounded-full" />
                   Subsidiary / fund
                 </span>
               </div>
@@ -246,17 +252,17 @@ export default function Home() {
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2.5">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-50 text-slate-300">
+                <span className="bg-canvas text-ink-subtle flex h-10 w-10 items-center justify-center rounded-xl">
                   <Network className="h-5 w-5" strokeWidth={1.5} />
                 </span>
-                <p className="text-[12.5px] text-slate-400">Select a result to load its relationship tree.</p>
+                <p className="text-ink-subtle text-[12.5px]">Select a result to load its relationship tree.</p>
               </div>
             )}
           </div>
         </section>
 
-        <aside className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <div className="flex h-11 shrink-0 items-center border-b border-slate-100 px-4">
+        <aside className="border-line bg-surface flex w-[clamp(25rem,30vw,34rem)] shrink-0 flex-col overflow-hidden rounded-xl shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="border-line-soft flex h-11 shrink-0 items-center border-b px-4">
             <SectionLabel icon={<Building2 className="h-3 w-3" strokeWidth={2} />}>Entity</SectionLabel>
           </div>
           <div className="min-h-0 flex-1">
