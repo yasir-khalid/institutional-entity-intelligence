@@ -13,9 +13,25 @@
 }
 
 /* Always light - this app is deliberately not theme-switching, so it never
-   picks up the OS's dark mode preference. */
+   picks up the OS's dark mode preference. No font-family here - Inter is
+   applied via next/font's className on <html> in layout.tsx; a hardcoded
+   font-family on body would silently override it (found and fixed live). */
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s ease-out both;
 }

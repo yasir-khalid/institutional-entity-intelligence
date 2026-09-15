@@ -5,6 +5,7 @@ import SearchBar from "@/components/SearchBar";
 import ResultsList from "@/components/ResultsList";
 import EntityTreeView from "@/components/EntityTreeView";
 import DetailsPanel from "@/components/DetailsPanel";
+import HowItWorks from "@/components/HowItWorks";
 import { ResultsSkeleton, TreeSkeleton } from "@/components/Skeletons";
 import {
   search,
@@ -101,18 +102,27 @@ export default function Home() {
   if (!hasSearched) {
     // Search-first landing page, like a search engine homepage - no
     // results/tree/details chrome until the user has actually searched for
-    // something.
+    // something. min-h-screen + overflow-y-auto (rather than a fixed
+    // h-screen) so the "How it works" section never gets clipped on a
+    // shorter viewport - it scrolls instead of being cut off.
     return (
-      <div className="flex h-screen w-screen flex-col items-center justify-center gap-6 bg-white px-6">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-slate-900">Institutional Entity Intelligence</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Search a name, LEI, or security ID (CUSIP) to explore the GLEIF relationship tree and SEC 13F activity.
-          </p>
+      <div className="flex min-h-screen w-screen flex-col items-center gap-10 overflow-y-auto bg-white px-6 py-16">
+        <div className="flex w-full max-w-xl flex-col items-center gap-6">
+          <div className="animate-fade-in-up text-center">
+            <h1 className="text-3xl font-bold text-slate-900">Institutional Entity Intelligence</h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Search a name, LEI, or security ID (CUSIP) to explore the GLEIF relationship tree and SEC 13F
+              activity.
+            </p>
+          </div>
+          <div className="animate-fade-in-up w-full" style={{ animationDelay: "120ms" }}>
+            <SearchBar onSearch={handleSearch} loading={searching} />
+            {searchError && <p className="mt-2 text-sm text-red-600">{searchError}</p>}
+          </div>
         </div>
-        <div className="w-full max-w-xl">
-          <SearchBar onSearch={handleSearch} loading={searching} />
-          {searchError && <p className="mt-2 text-sm text-red-600">{searchError}</p>}
+
+        <div className="animate-fade-in-up" style={{ animationDelay: "240ms" }}>
+          <HowItWorks />
         </div>
       </div>
     );
