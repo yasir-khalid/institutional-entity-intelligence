@@ -1,38 +1,49 @@
 "use client";
 
-export function Bar({ className = "", style }: { className?: string; style?: React.CSSProperties }) {
-  return <div style={style} className={`animate-pulse rounded bg-slate-200 ${className}`} />;
+import type { CSSProperties } from "react";
+
+export function Bar({ className = "", style }: { className?: string; style?: CSSProperties }) {
+  return <div style={style} className={`animate-pulse rounded bg-slate-100 ${className}`} />;
 }
 
+/** Mirrors ResultsList's row geometry exactly - 44px rows, icon tile, name,
+ * jurisdiction and identifier columns - so the swap to real rows doesn't
+ * shift anything on the page. */
 export function ResultsSkeleton() {
   return (
-    <div className="flex flex-col divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+    <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
       {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="flex items-center justify-between px-4 py-2.5">
-          <div className="flex-1">
-            <Bar className="mb-1.5 h-4 w-48" />
-            <Bar className="h-3 w-32" />
-          </div>
-          <Bar className="h-4 w-16" />
-        </div>
+        <li key={i} className="flex h-11 items-center gap-3 px-3.5">
+          <Bar className="h-7 w-7 shrink-0 rounded-md" />
+          <Bar
+            className="h-3 flex-1"
+            style={{ maxWidth: `${22 + ((i * 9) % 16)}%`, animationDelay: `${i * 80}ms` }}
+          />
+          <Bar className="hidden h-3 w-14 shrink-0 sm:block" style={{ animationDelay: `${i * 80}ms` }} />
+          <Bar className="hidden h-3 w-[13.5rem] shrink-0 md:block" style={{ animationDelay: `${i * 80}ms` }} />
+          <Bar className="h-4 w-4 shrink-0 rounded" />
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
-/** Loosely mimics the org-chart card layout (a root card, a row of child
- * cards) so the loading state previews the shape of what's coming, rather
- * than a generic spinner. */
+/** Mirrors the tree's row geometry and indentation so the loading state
+ * previews the shape of what's coming rather than a generic spinner. No card
+ * chrome here either - the panel owns it, same as EntityTreeView. */
 export function TreeSkeleton() {
+  const rows = [0, 1, 1, 2, 1, 1, 2, 2, 1];
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-6 rounded-lg border border-slate-200 bg-slate-50 p-8">
-      <Bar className="h-14 w-56 rounded-lg" />
-      <div className="h-6 w-px bg-slate-200" />
-      <div className="flex gap-6">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Bar key={i} className="h-14 w-40 rounded-lg" style={{ animationDelay: `${i * 100}ms` }} />
-        ))}
-      </div>
+    <div className="h-full w-full p-2">
+      {rows.map((depth, i) => (
+        <div key={i} className="flex h-9 items-center gap-2" style={{ paddingLeft: depth * 22 }}>
+          <Bar className="h-3.5 w-3.5 shrink-0 rounded" style={{ animationDelay: `${i * 60}ms` }} />
+          <Bar
+            className="h-3 rounded"
+            style={{ width: `${34 - depth * 6 + ((i * 7) % 18)}%`, animationDelay: `${i * 60}ms` }}
+          />
+        </div>
+      ))}
     </div>
   );
 }

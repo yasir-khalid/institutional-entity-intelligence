@@ -1,85 +1,109 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Search, Crosshair, Network, PanelRight, type LucideIcon } from "lucide-react";
+import { SectionLabel } from "@/components/ui";
 
-const STEPS = [
+const STEPS: { icon: LucideIcon; title: string; desc: string }[] = [
   {
-    icon: "🔍",
+    icon: Search,
     title: "Search",
-    desc: "Search a name, LEI, or security ID (CUSIP) - whatever you have on hand.",
+    desc: "Start from a name, an LEI, or a security ID — whatever identifier you happen to have.",
   },
   {
-    icon: "🎯",
+    icon: Crosshair,
     title: "Resolve",
-    desc: "Pick the right entity from ranked results, or jump straight in on a clear match.",
+    desc: "Candidates are scored and ranked, with a clear match resolved automatically.",
   },
   {
-    icon: "🌳",
+    icon: Network,
     title: "Explore",
-    desc: "Browse the GLEIF relationship tree - parents, subsidiaries, and managed funds.",
+    desc: "Walk the GLEIF relationship tree — parent companies, subsidiaries and managed funds.",
   },
   {
-    icon: "📋",
+    icon: PanelRight,
     title: "Inspect",
-    desc: "Click any entity for its full profile: identifiers and SEC 13F reported holdings.",
+    desc: "Open any entity for its identifiers, lineage, provenance and SEC 13F activity.",
   },
 ];
 
 export default function HowItWorks() {
   const [active, setActive] = useState(0);
-  // Draws the connecting line in on mount rather than having it appear
-  // instantly - a small touch that makes the "flow" read as a flow.
-  const [lineDrawn, setLineDrawn] = useState(false);
+  // The connector draws itself in on mount so the row reads as a sequence
+  // rather than four unrelated icons that happen to sit in a line.
+  const [drawn, setDrawn] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => setLineDrawn(true), 50);
+    const t = setTimeout(() => setDrawn(true), 80);
     return () => clearTimeout(t);
   }, []);
 
   return (
-    <div className="w-full max-w-2xl">
-      <h2 className="mb-6 text-center text-xs font-semibold uppercase tracking-widest text-slate-400">
-        How it works
-      </h2>
-
-      <div className="relative flex items-start justify-between px-2">
-        {/* Connecting line sits behind the circles, spanning center-to-center
-            of the first and last step - drawn in via a scaleX transition. */}
-        <div
-          className="absolute top-6 right-[12.5%] left-[12.5%] h-0.5 origin-left bg-slate-200 transition-transform duration-700 ease-out"
-          style={{ transform: lineDrawn ? "scaleX(1)" : "scaleX(0)" }}
-        />
-
-        {STEPS.map((step, i) => {
-          const isActive = i === active;
-          return (
-            <button
-              key={step.title}
-              onMouseEnter={() => setActive(i)}
-              onFocus={() => setActive(i)}
-              className="group relative z-10 flex flex-1 flex-col items-center gap-2 text-center"
-            >
-              <span
-                className={`flex h-12 w-12 items-center justify-center rounded-full border-2 bg-white text-xl transition-all duration-200 ${
-                  isActive
-                    ? "scale-110 border-blue-600 shadow-md shadow-blue-100"
-                    : "border-slate-200 group-hover:border-slate-300"
-                }`}
-              >
-                {step.icon}
-              </span>
-              <div className={`text-xs font-semibold transition-colors ${isActive ? "text-blue-600" : "text-slate-500"}`}>
-                {i + 1}. {step.title}
-              </div>
-            </button>
-          );
-        })}
+    <section className="w-full max-w-2xl" aria-label="How it works">
+      <div className="mb-6 flex justify-center">
+        <SectionLabel>How it works</SectionLabel>
       </div>
 
-      <div className="mx-auto mt-5 h-10 max-w-sm text-center">
-        <p key={active} className="animate-fade-in-up text-xs leading-snug text-slate-500">
+      <div className="relative">
+        {/* Connector sits at the vertical centre of the icon tiles and spans
+            centre-to-centre of the first and last step. */}
+        <div className="pointer-events-none absolute top-[22px] right-[12.5%] left-[12.5%] h-px overflow-hidden">
+          <div
+            className="h-px w-full origin-left bg-gradient-to-r from-slate-200 via-slate-200 to-slate-200 transition-transform duration-[900ms] ease-out"
+            style={{ transform: drawn ? "scaleX(1)" : "scaleX(0)" }}
+          />
+        </div>
+
+        <ol className="relative flex items-start">
+          {STEPS.map((step, i) => {
+            const Icon = step.icon;
+            const isActive = i === active;
+            return (
+              <li key={step.title} className="flex flex-1 justify-center">
+                <button
+                  type="button"
+                  onMouseEnter={() => setActive(i)}
+                  onFocus={() => setActive(i)}
+                  aria-current={isActive}
+                  className="group flex flex-col items-center gap-2.5 outline-none"
+                >
+                  <span
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl border bg-white transition-all duration-200 ${
+                      isActive
+                        ? "border-indigo-200 text-indigo-600 shadow-[0_0_0_4px_rgb(238_242_255)]"
+                        : "border-slate-200 text-slate-400 group-hover:border-slate-300 group-hover:text-slate-500"
+                    }`}
+                  >
+                    <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </span>
+                  <span className="flex flex-col items-center gap-0.5">
+                    <span
+                      className={`text-[10px] font-semibold tabular transition-colors ${
+                        isActive ? "text-indigo-400" : "text-slate-300"
+                      }`}
+                    >
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    <span
+                      className={`text-[13px] font-medium transition-colors ${
+                        isActive ? "text-slate-900" : "text-slate-500"
+                      }`}
+                    >
+                      {step.title}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+
+      {/* Fixed height so swapping descriptions never shifts the page. */}
+      <div className="mx-auto mt-5 flex h-9 max-w-md items-start justify-center">
+        <p key={active} className="animate-fade-in text-center text-[12.5px] leading-relaxed text-slate-500">
           {STEPS[active].desc}
         </p>
       </div>
-    </div>
+    </section>
   );
 }

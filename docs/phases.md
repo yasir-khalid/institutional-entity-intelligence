@@ -721,3 +721,61 @@ updated 23 Jul 2026, Renewal due 12 Aug 2027, status ISSUED) and clicking the
 CIK identifier row expands to show its source file
 (`sec_13f_filings.parquet`), snapshot date, ingestion timestamp, and
 confidence (`AUTO_MATCH`).
+
+---
+
+## Phase 17: design pass - one type scale, one colour system, no emoji
+
+The UI worked but looked assembled rather than designed: three font stacks in
+play (a hardcoded `Arial` on `body` was silently overriding the loaded Inter),
+emoji used as icons, ad-hoc badge colours per component, and panels whose
+frames began at different y-positions.
+
+### What changed
+
+- **Type**: `Inter` + `JetBrains_Mono` loaded via `next/font/google` as CSS
+  variables and mapped through Tailwind v4 `@theme`. Mono is reserved for
+  identifiers. A `.tabular` utility (`font-variant-numeric: tabular-nums`)
+  applies to every figure read down a column - dates, counts, dollar amounts,
+  LEIs.
+- **Colour**: one accent (indigo), two *semantic* hues - emerald for upward /
+  parent, violet for downward / subsidiary / fund - slate for structure, amber
+  and rose for caveats and errors.
+- **Icons**: `lucide-react` replaces every emoji in the UI.
+- **`components/ui.tsx`** (new): `SectionLabel`, `Badge` (seven named
+  variants), `Mono`, `Field`/`FieldGrid`. Each component previously spelled
+  these out inline with slightly different sizes and colours; they are now
+  declared once.
+
+### Alignment fixes found by screenshotting, not by reading code
+
+Each of these was invisible in the source and obvious in a real 1440x900
+render (headless Chrome driving the running dev server):
+
+- The tree label sat *outside* its card while the details title sat *inside*,
+  so the two panes started on different baselines. Both are now cards with an
+  identical `h-11` titled header bar.
+- The header search bar was centred within its flex slot, not within the
+  viewport. Fixed with `grid-cols-[1fr_auto_1fr]`.
+- The search-type segmented control stacked *under* the compact field, making
+  the app header two bars tall. It now sits inline beside the field at a
+  matching 40px height, and only stacks in the landing page's hero size.
+- Results rows were two-line blocks with a lone chevron ~1,800px to the right.
+  They are now 44px rows with aligned name / jurisdiction / LEI columns, which
+  is what makes ten near-identical Point72 entities comparable at a glance.
+- The raw retrieval score ("40", identical on every row) was removed: an
+  unnormalised BM25 value means nothing to a reader and the list is already
+  sorted by it.
+- With results on screen but nothing selected, two empty panes filled most of
+  the viewport. The results now take the full stage until an entity is picked,
+  then collapse to the capped strip.
+- The lineage card duplicated the section heading and floated its status badge
+  alone on its own row; the heading was dropped and the badge moved into the
+  section header via a widened `hint?: React.ReactNode` slot.
+
+### Verify
+
+```bash
+cd web && npx tsc --noEmit && npm run build   # both clean
+make api && cd web && npm run dev             # then compare against the screens above
+```

@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { AlertCircle, Building2, Network, Waypoints } from "lucide-react";
 import SearchBar from "@/components/SearchBar";
 import ResultsList from "@/components/ResultsList";
 import EntityTreeView from "@/components/EntityTreeView";
 import DetailsPanel from "@/components/DetailsPanel";
 import HowItWorks from "@/components/HowItWorks";
 import { ResultsSkeleton, TreeSkeleton } from "@/components/Skeletons";
+import { SectionLabel } from "@/components/ui";
 import {
   search,
   getEntityTree,
@@ -19,14 +21,33 @@ import {
 
 const TREE_DEPTH = 2;
 
+function Wordmark({ size = "default" }: { size?: "default" | "hero" }) {
+  const hero = size === "hero";
+  return (
+    <div className="flex items-center gap-2.5">
+      <span
+        className={`flex items-center justify-center rounded-lg bg-slate-900 text-white ${
+          hero ? "h-9 w-9" : "h-7 w-7"
+        }`}
+      >
+        <Waypoints className={hero ? "h-[18px] w-[18px]" : "h-3.5 w-3.5"} strokeWidth={1.75} />
+      </span>
+      <span
+        className={`font-semibold tracking-[-0.015em] text-slate-900 ${hero ? "text-[19px]" : "text-[14px]"}`}
+      >
+        Institutional Entity Intelligence
+      </span>
+    </div>
+  );
+}
+
 export default function Home() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[] | null>(null);
-  // Distinct from `results !== null`: this flips to true the moment a search
-  // is fired and never resets, so the page commits to the results/tree
-  // layout even while the very first search is still in flight (showing its
-  // skeleton) rather than snapping back to the landing page in between.
+  // Distinct from `results !== null`: flips true the moment a search fires and
+  // never resets, so the page commits to the workspace layout even while the
+  // first search is still in flight rather than snapping back to the landing.
   const [hasSearched, setHasSearched] = useState(false);
 
   const [rootEntityId, setRootEntityId] = useState<string | null>(null);
@@ -44,8 +65,7 @@ export default function Home() {
     setDetailLoading(true);
     setDetailError(null);
     try {
-      const d = await getEntityDetail(entityId);
-      setDetail(d);
+      setDetail(await getEntityDetail(entityId));
     } catch (e) {
       setDetailError(e instanceof Error ? e.message : "Failed to load entity");
       setDetail(null);
@@ -60,8 +80,7 @@ export default function Home() {
       setTreeLoading(true);
       setTreeError(null);
       try {
-        const tree = await getEntityTree(entityId, TREE_DEPTH);
-        setTreeData(tree);
+        setTreeData(await getEntityTree(entityId, TREE_DEPTH));
       } catch (e) {
         setTreeError(e instanceof Error ? e.message : "Failed to load relationship tree");
         setTreeData(null);
@@ -82,115 +101,167 @@ export default function Home() {
       const resp = await search(query, searchType);
       setResults(resp.results);
       setSearching(false);
-      // A single unambiguous result (or a confident AUTO_MATCH) jumps
-      // straight to the tree - fired after `searching` clears so the
-      // results skeleton and the tree skeleton never both show at once.
+      // A single unambiguous result (or a confident AUTO_MATCH) goes straight
+      // to the tree - fired after `searching` clears so the results skeleton
+      // and the tree skeleton never show at the same time.
       const autoMatch = resp.results.find((r) => r.decision === "AUTO_MATCH");
-      if (resp.results.length === 1) {
-        void loadTree(resp.results[0].entity_id);
-      } else if (autoMatch) {
-        void loadTree(autoMatch.entity_id);
-      }
+      if (resp.results.length === 1) void loadTree(resp.results[0].entity_id);
+      else if (autoMatch) void loadTree(autoMatch.entity_id);
     } catch (e) {
       setSearchError(e instanceof Error ? e.message : "Search failed");
       setSearching(false);
     }
   }
 
-  const showResultsPicker = results && results.length > 1;
+  const showResultsPicker = results !== null && results.length > 1;
+  // Until an entity is picked there is nothing to put in the tree or details
+  // panes, so the results take the whole stage rather than sitting in a thin
+  // strip above two empty cards.
+  const workspaceActive = Boolean(rootEntityId || treeLoading);
 
   if (!hasSearched) {
-    // Search-first landing page, like a search engine homepage - no
-    // results/tree/details chrome until the user has actually searched for
-    // something. min-h-screen + overflow-y-auto (rather than a fixed
-    // h-screen) so the "How it works" section never gets clipped on a
-    // shorter viewport - it scrolls instead of being cut off.
     return (
-      <div className="flex min-h-screen w-screen flex-col items-center gap-10 overflow-y-auto bg-white px-6 py-16">
-        <div className="flex w-full max-w-xl flex-col items-center gap-6">
-          <div className="animate-fade-in-up text-center">
-            <h1 className="text-3xl font-bold text-slate-900">Institutional Entity Intelligence</h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Search a name, LEI, or security ID (CUSIP) to explore the GLEIF relationship tree and SEC 13F
-              activity.
-            </p>
-          </div>
-          <div className="animate-fade-in-up w-full" style={{ animationDelay: "120ms" }}>
-            <SearchBar onSearch={handleSearch} loading={searching} />
-            {searchError && <p className="mt-2 text-sm text-red-600">{searchError}</p>}
-          </div>
-        </div>
+      <div className="scroll-thin flex min-h-screen flex-col overflow-y-auto bg-white">
+        <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center gap-12 px-6 py-20">
+          <div className="flex w-full flex-col items-center gap-7">
+            <div className="animate-fade-in-up flex flex-col items-center gap-3 text-center">
+              <Wordmark size="hero" />
+              <p className="max-w-md text-[13.5px] leading-relaxed text-slate-500">
+                Resolve a fund or manager to its legal entity, then explore its ownership structure and SEC filing
+                activity.
+              </p>
+            </div>
 
-        <div className="animate-fade-in-up" style={{ animationDelay: "240ms" }}>
-          <HowItWorks />
+            <div className="animate-fade-in-up w-full" style={{ animationDelay: "100ms" }}>
+              <SearchBar onSearch={handleSearch} loading={searching} size="hero" />
+              {searchError && (
+                <p className="mt-3 flex items-center justify-center gap-1.5 text-[12.5px] text-rose-600">
+                  <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
+                  {searchError}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="animate-fade-in-up w-full" style={{ animationDelay: "200ms" }}>
+            <HowItWorks />
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-white">
-      <header className="shrink-0 border-b border-slate-200 px-6 py-3">
-        <div className="mx-auto flex max-w-2xl flex-col gap-1">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-50">
+      {/* Three equal-weight columns so the search bar is optically centred in
+          the viewport regardless of how wide the wordmark renders. */}
+      <header className="z-10 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-6 border-b border-slate-200 bg-white px-5 py-3">
+        <button
+          type="button"
+          onClick={() => setHasSearched(false)}
+          className="justify-self-start outline-none transition-opacity hover:opacity-70"
+          aria-label="Back to start"
+        >
+          <Wordmark />
+        </button>
+        <div className="w-[min(44rem,64vw)]">
           <SearchBar onSearch={handleSearch} loading={searching} />
-          {searchError && <p className="text-sm text-red-600">{searchError}</p>}
         </div>
+        <div aria-hidden />
       </header>
 
-      {searching && (
-        <div className="max-h-56 shrink-0 overflow-y-auto border-b border-slate-200 px-6 py-3">
-          <h2 className="mb-2 text-sm font-semibold text-slate-700">Searching...</h2>
-          <ResultsSkeleton />
+      {searchError && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-rose-100 bg-rose-50 px-5 py-2 text-[12.5px] text-rose-700">
+          <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
+          {searchError}
         </div>
       )}
 
-      {!searching && showResultsPicker && (
-        // max-h + overflow-y-auto is load-bearing, not cosmetic: without a
-        // cap, a result set with many rows (e.g. a brand name like "Point72"
-        // returning 10+ legal entities) grows unbounded and can squeeze the
-        // flex-1 tree/details area below it down to zero height on a normal
-        // laptop screen - clicks would still fire and fetch data (network
-        // tab shows it), but the newly-rendered tree/details section would
-        // be invisible at 0px tall. Confirmed live: this was exactly that bug.
-        <div className="max-h-56 shrink-0 overflow-y-auto border-b border-slate-200 px-6 py-3">
-          <h2 className="mb-2 text-sm font-semibold text-slate-700">Results - pick one to explore</h2>
-          <ResultsList results={results} onSelect={loadTree} />
-        </div>
+      {!workspaceActive && (searching || results !== null) && (
+        <main className="scroll-thin min-h-0 flex-1 overflow-y-auto bg-white px-5 pt-4 pb-6">
+          <div className="mb-2.5">
+            <SectionLabel>{searching ? "Searching" : `${results?.length ?? 0} results`}</SectionLabel>
+          </div>
+          {searching ? <ResultsSkeleton /> : results && <ResultsList results={results} onSelect={loadTree} />}
+        </main>
       )}
 
-      <main className="flex min-h-0 flex-1 gap-4 p-4">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {rootEntityId ? (
-            <>
-              <h2 className="mb-2 shrink-0 text-sm font-semibold text-slate-700">
-                Relationship tree (depth {TREE_DEPTH}) - click a card for details, use the ▾/▸ toggle to
-                expand or collapse a branch.
-              </h2>
-              {treeError && <p className="text-sm text-red-600">{treeError}</p>}
-              {treeLoading ? (
-                <TreeSkeleton />
-              ) : (
-                treeData && (
-                  <div className="min-h-0 flex-1">
-                    <EntityTreeView
-                      key={rootEntityId}
-                      data={treeData}
-                      selectedEntityId={selectedEntityId}
-                      onSelect={loadEntity}
-                    />
-                  </div>
-                )
-              )}
-            </>
-          ) : (
-            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-400">
-              Pick a result above to explore its relationship tree.
+      {workspaceActive && (searching || showResultsPicker) && (
+        // Once the workspace is live the picker collapses to a strip. The
+        // height cap is load-bearing, not cosmetic: an uncapped list (a brand
+        // name can return 10+ legal entities) grows until it squeezes the
+        // workspace below it to zero height, making the tree and details
+        // invisible even though they rendered.
+        <div className="relative shrink-0 border-b border-slate-200 bg-white">
+          <div className="scroll-thin max-h-[13.5rem] overflow-y-auto px-5 pt-3.5 pb-5">
+            <div className="mb-2.5">
+              <SectionLabel>{searching ? "Searching" : `${results?.length ?? 0} results`}</SectionLabel>
             </div>
-          )}
+            {searching ? <ResultsSkeleton /> : results && <ResultsList results={results} onSelect={loadTree} />}
+          </div>
+          {/* Fades the last visible row instead of slicing it flat, so it reads
+              as "more below" rather than as a clipping bug. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent" />
         </div>
+      )}
 
-        <aside className="w-[380px] shrink-0 overflow-y-auto rounded-lg border border-slate-200">
-          <DetailsPanel detail={detail} loading={detailLoading} error={detailError} />
+      {/* Both panes are cards with an identical 44px titled header bar, so
+          their frames, headers and content areas start on the same baseline. */}
+      <main className={`min-h-0 flex-1 gap-4 p-4 ${workspaceActive ? "flex" : "hidden"}`}>
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4">
+            <SectionLabel icon={<Network className="h-3 w-3" strokeWidth={2} />}>
+              Relationship tree · depth {TREE_DEPTH}
+            </SectionLabel>
+            {rootEntityId && !treeLoading && (
+              <div className="flex items-center gap-3.5 text-[10.5px] text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  Parent
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+                  Subsidiary / fund
+                </span>
+              </div>
+            )}
+          </div>
+
+          {treeError && (
+            <p className="flex shrink-0 items-center gap-1.5 border-b border-rose-100 bg-rose-50 px-4 py-2 text-[12.5px] text-rose-700">
+              <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
+              {treeError}
+            </p>
+          )}
+
+          <div className="min-h-0 flex-1">
+            {treeLoading ? (
+              <TreeSkeleton />
+            ) : treeData && rootEntityId ? (
+              <EntityTreeView
+                key={rootEntityId}
+                data={treeData}
+                selectedEntityId={selectedEntityId}
+                onSelect={loadEntity}
+              />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-2.5">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-50 text-slate-300">
+                  <Network className="h-5 w-5" strokeWidth={1.5} />
+                </span>
+                <p className="text-[12.5px] text-slate-400">Select a result to load its relationship tree.</p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <aside className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="flex h-11 shrink-0 items-center border-b border-slate-100 px-4">
+            <SectionLabel icon={<Building2 className="h-3 w-3" strokeWidth={2} />}>Entity</SectionLabel>
+          </div>
+          <div className="min-h-0 flex-1">
+            <DetailsPanel detail={detail} loading={detailLoading} error={detailError} />
+          </div>
         </aside>
       </main>
     </div>

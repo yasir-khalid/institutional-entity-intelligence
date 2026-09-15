@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Circle } from "lucide-react";
 import type { TreeNode } from "@/lib/api";
+import { Badge, Mono } from "@/components/ui";
 
 interface SpanningNode {
   id: string;
@@ -15,11 +17,10 @@ interface SpanningNode {
 /** Rebuilds the API's nested tree into a proper spanning tree - one parent
  * per entity, first-discovery wins - before rendering. Without this, GLEIF's
  * cross-referenced relationships (a fund's own "umbrella" listing pointing
- * back at a sibling already reached directly from root) show the same
- * entity twice with two different sets of children, which is confusing in a
- * plain indented tree in exactly the way it broke collapse state in an
- * earlier graph-based version of this view (see docs/phases.md Phase 14).
- */
+ * back at a sibling already reached directly from root) show the same entity
+ * twice with two different sets of children, which is confusing in a plain
+ * tree in exactly the way it broke collapse state in an earlier graph-based
+ * version of this view (see docs/phases.md Phase 14). */
 function toSpanningTree(root: TreeNode): SpanningNode {
   const seen = new Set<string>();
 
@@ -45,39 +46,10 @@ function toSpanningTree(root: TreeNode): SpanningNode {
   return visit(root, new Set())!;
 }
 
-const DIRECTION_ACCENT: Record<string, string> = {
-  upward: "border-l-green-500",
-  downward: "border-l-purple-500",
-};
-
-function Card({
-  node,
-  isSelected,
-  onSelect,
-}: {
-  node: SpanningNode;
-  isSelected: boolean;
-  onSelect: () => void;
-}) {
-  const accent = node.direction ? DIRECTION_ACCENT[node.direction] : "border-l-blue-600";
-  return (
-    <button
-      onClick={onSelect}
-      className={`flex items-center gap-2 rounded-md border border-l-4 bg-white px-3 py-1.5 text-left text-sm shadow-sm transition-shadow hover:shadow ${accent} ${
-        isSelected ? "ring-2 ring-blue-400" : "border-slate-200"
-      }`}
-    >
-      <span className={`truncate ${node.isRoot ? "font-semibold text-slate-900" : "text-slate-800"}`}>
-        {node.name}
-      </span>
-      {node.label && <span className="shrink-0 text-xs text-slate-400">{node.label}</span>}
-      {node.isRoot && (
-        <span className="shrink-0 rounded bg-blue-600 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-white">
-          Query
-        </span>
-      )}
-    </button>
-  );
+function DirectionIcon({ direction, isRoot }: { direction: SpanningNode["direction"]; isRoot: boolean }) {
+  if (isRoot) return <Circle className="h-3 w-3 fill-indigo-500 text-indigo-500" strokeWidth={0} />;
+  if (direction === "upward") return <ArrowUp className="h-3.5 w-3.5 text-emerald-600" strokeWidth={2.25} />;
+  return <ArrowDown className="h-3.5 w-3.5 text-violet-500" strokeWidth={2.25} />;
 }
 
 function Branch({
@@ -91,35 +63,82 @@ function Branch({
   selectedEntityId: string | null;
   onSelect: (entityId: string) => void;
 }) {
-  // Only the root's direct children are expanded by default - everything
-  // past that starts collapsed so a large fan-out (a manager with dozens of
-  // funds) doesn't dump hundreds of cards on first paint.
+  // Only the root's direct children are expanded by default - everything past
+  // that starts collapsed so a large fan-out (a manager with dozens of funds)
+  // doesn't dump hundreds of rows on first paint.
   const [expanded, setExpanded] = useState(depth < 1);
   const hasChildren = node.children.length > 0;
+  const isSelected = node.id === selectedEntityId;
 
   return (
     <div>
-      <div className="flex items-center gap-1.5">
-        {hasChildren ? (
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-            aria-label={expanded ? "Collapse" : "Expand"}
+      <div
+        className={`group relative flex h-9 items-center gap-1 rounded-md pr-2 transition-colors ${
+          isSelected ? "bg-indigo-50" : "hover:bg-slate-50"
+        }`}
+      >
+        {isSelected && <span className="absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-full bg-indigo-500" />}
+
+        <button
+          type="button"
+          onClick={() => hasChildren && setExpanded((v) => !v)}
+          aria-label={hasChildren ? (expanded ? "Collapse" : "Expand") : undefined}
+          disabled={!hasChildren}
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-600 disabled:pointer-events-none disabled:opacity-0"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5" strokeWidth={2.25} />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" strokeWidth={2.25} />
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onSelect(node.id)}
+          className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left outline-none"
+        >
+          <span className="flex w-4 shrink-0 justify-center">
+            <DirectionIcon direction={node.direction} isRoot={node.isRoot} />
+          </span>
+
+          <span
+            className={`truncate text-[13px] ${
+              node.isRoot ? "font-semibold text-slate-900" : isSelected ? "font-medium text-slate-900" : "text-slate-700"
+            }`}
+            title={node.name}
           >
-            {expanded ? "▾" : "▸"}
-          </button>
-        ) : (
-          <span className="w-5 shrink-0" />
-        )}
-        <Card node={node} isSelected={node.id === selectedEntityId} onSelect={() => onSelect(node.id)} />
+            {node.name}
+          </span>
+
+          {node.label && (
+            <span className="hidden shrink-0 text-[11px] text-slate-400 sm:inline">{node.label}</span>
+          )}
+
+          {node.isRoot && (
+            <Badge variant="accent" className="ml-0.5">
+              Query
+            </Badge>
+          )}
+
+          <Mono className="ml-auto hidden shrink-0 pl-3 text-slate-300 group-hover:text-slate-400 lg:inline">
+            {node.id}
+          </Mono>
+        </button>
       </div>
 
       {expanded && hasChildren && (
-        <div className="ml-[10px] border-l border-slate-200 pl-4">
+        // Indent guide: one continuous hairline per level, so depth is legible
+        // at a glance without needing to count indentation by eye.
+        <div className="ml-[9px] border-l border-slate-150 pl-3" style={{ borderColor: "rgb(226 232 240)" }}>
           {node.children.map((child) => (
-            <div key={child.id} className="pt-1.5 first:pt-1.5">
-              <Branch node={child} depth={depth + 1} selectedEntityId={selectedEntityId} onSelect={onSelect} />
-            </div>
+            <Branch
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              selectedEntityId={selectedEntityId}
+              onSelect={onSelect}
+            />
           ))}
         </div>
       )}
@@ -138,8 +157,10 @@ export default function EntityTreeView({
 }) {
   const tree = useMemo(() => toSpanningTree(data), [data]);
 
+  // No border/radius here - the parent panel owns the card chrome so this and
+  // the details panel share one consistent frame.
   return (
-    <div className="h-full w-full overflow-auto rounded-lg border border-slate-200 bg-white p-3">
+    <div className="scroll-thin h-full w-full overflow-auto p-2">
       <Branch node={tree} depth={0} selectedEntityId={selectedEntityId} onSelect={onSelect} />
     </div>
   );
