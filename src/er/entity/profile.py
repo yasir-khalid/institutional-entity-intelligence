@@ -11,7 +11,7 @@ from __future__ import annotations
 import duckdb
 
 from er.config import AppConfig
-from er.entity.models import EntityIdentifier, EntityProfile, Sec13FActivity, Sec13FHoldingSummary
+from er.entity.models import EntityIdentifier, EntityLineage, EntityProfile, Sec13FActivity, Sec13FHoldingSummary
 from er.graph.build import build_hierarchy
 
 
@@ -22,7 +22,8 @@ def _load_identifiers(cfg: AppConfig, entity_id: str) -> list[EntityIdentifier]:
     con = duckdb.connect()
     rows = con.execute(
         f"""
-        SELECT identifier_type, identifier_value, confidence, source
+        SELECT identifier_type, identifier_value, confidence, source,
+               source_file, snapshot_date, ingested_at
         FROM read_parquet('{path}')
         WHERE entity_id = ?
         """,
@@ -30,8 +31,16 @@ def _load_identifiers(cfg: AppConfig, entity_id: str) -> list[EntityIdentifier]:
     ).fetchall()
     con.close()
     return [
-        EntityIdentifier(identifier_type=t, identifier_value=v, confidence=c, source=s)
-        for t, v, c, s in rows
+        EntityIdentifier(
+            identifier_type=t,
+            identifier_value=v,
+            confidence=c,
+            source=s,
+            source_file=sf,
+            snapshot_date=sd,
+            ingested_at=ia,
+        )
+        for t, v, c, s, sf, sd, ia in rows
     ]
 
 
@@ -106,7 +115,9 @@ def get_entity_profile(cfg: AppConfig, entity_id: str) -> EntityProfile | None:
     con = duckdb.connect()
     row = con.execute(
         f"""
-        SELECT entity_id, canonical_name, entity_type, jurisdiction, legal_country, entity_status
+        SELECT entity_id, canonical_name, entity_type, jurisdiction, legal_country, entity_status,
+               entity_creation_date, initial_registration_date, last_update_date,
+               next_renewal_date, registration_status, gleif_snapshot_date
         FROM read_parquet('{path}') WHERE entity_id = ?
         """,
         [entity_id],
@@ -115,6 +126,15 @@ def get_entity_profile(cfg: AppConfig, entity_id: str) -> EntityProfile | None:
     if not row:
         return None
 
+    lineage = EntityLineage(
+        entity_creation_date=row[6],
+        initial_registration_date=row[7],
+        last_update_date=row[8],
+        next_renewal_date=row[9],
+        registration_status=row[10],
+        gleif_snapshot_date=row[11],
+    )
+
     return EntityProfile(
         entity_id=row[0],
         canonical_name=row[1],
@@ -122,6 +142,7 @@ def get_entity_profile(cfg: AppConfig, entity_id: str) -> EntityProfile | None:
         jurisdiction=row[3],
         legal_country=row[4],
         entity_status=row[5],
+        lineage=lineage,
         identifiers=_load_identifiers(cfg, entity_id),
         hierarchy=build_hierarchy(cfg, entity_id),
         sec_13f=_load_sec_13f_activity(cfg, entity_id),

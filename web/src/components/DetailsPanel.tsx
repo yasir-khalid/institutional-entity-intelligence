@@ -1,11 +1,19 @@
 "use client";
 
-import type { EntityDetail } from "@/lib/api";
+import { useState } from "react";
+import type { EntityDetail, EntityIdentifier } from "@/lib/api";
 import { Bar } from "@/components/Skeletons";
+import LineageTimeline from "@/components/LineageTimeline";
 
 function formatUsd(value: number | null): string {
   if (value === null) return "-";
   return `$${value.toLocaleString()}`;
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "-";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
 }
 
 function DetailsSkeleton() {
@@ -20,6 +28,7 @@ function DetailsSkeleton() {
           <Bar key={i} className="h-4 w-full" />
         ))}
       </div>
+      <Bar className="h-16 w-full rounded-lg" />
       <div>
         <Bar className="mb-2 h-4 w-24" />
         {Array.from({ length: 3 }).map((_, i) => (
@@ -33,6 +42,49 @@ function DetailsSkeleton() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** One identifier row, expandable to reveal its provenance (source file,
+ * snapshot date, ingestion timestamp) - kept collapsed by default so the
+ * table stays scannable, but the data is one click away rather than nowhere
+ * at all. A chevron ▸/▾ makes the affordance obvious. */
+function IdentifierRow({ identifier }: { identifier: EntityIdentifier }) {
+  const [open, setOpen] = useState(false);
+  const hasProvenance = identifier.source_file || identifier.snapshot_date || identifier.ingested_at;
+
+  return (
+    <>
+      <tr
+        onClick={() => hasProvenance && setOpen((v) => !v)}
+        className={hasProvenance ? "cursor-pointer hover:bg-slate-50" : undefined}
+      >
+        <td className="py-0.5 pr-2">
+          <span className="inline-flex items-center gap-1">
+            {hasProvenance && <span className="text-[9px] text-slate-400">{open ? "▾" : "▸"}</span>}
+            {identifier.identifier_type}
+          </span>
+        </td>
+        <td className="py-0.5 pr-2 break-all">{identifier.identifier_value}</td>
+        <td className="py-0.5">{identifier.source}</td>
+      </tr>
+      {open && hasProvenance && (
+        <tr>
+          <td colSpan={3} className="bg-slate-50 px-2 py-1.5 text-[10px] text-slate-500">
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <span className="text-slate-400">Source file</span>
+              <span className="break-all">{identifier.source_file ?? "-"}</span>
+              <span className="text-slate-400">Snapshot</span>
+              <span>{formatDate(identifier.snapshot_date)}</span>
+              <span className="text-slate-400">Ingested</span>
+              <span>{formatDate(identifier.ingested_at)}</span>
+              <span className="text-slate-400">Confidence</span>
+              <span>{identifier.confidence}</span>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -77,8 +129,14 @@ export default function DetailsPanel({
         <div>{detail.subsidiary_count}</div>
       </div>
 
+      <div className="rounded-lg border border-slate-200 p-3">
+        <LineageTimeline lineage={detail.lineage} />
+      </div>
+
       <div>
-        <h3 className="mb-1 text-sm font-semibold text-slate-700">Identifiers</h3>
+        <h3 className="mb-1 text-sm font-semibold text-slate-700">
+          Identifiers <span className="font-normal text-slate-400">(click a row for provenance)</span>
+        </h3>
         <table className="w-full text-xs">
           <thead>
             <tr className="text-left text-slate-500">
@@ -89,16 +147,12 @@ export default function DetailsPanel({
           </thead>
           <tbody>
             <tr>
-              <td className="pr-2 py-0.5">LEI</td>
-              <td className="pr-2 py-0.5 break-all">{detail.entity_id}</td>
+              <td className="py-0.5 pr-2">LEI</td>
+              <td className="py-0.5 pr-2 break-all">{detail.entity_id}</td>
               <td className="py-0.5">gleif</td>
             </tr>
             {detail.identifiers.map((id, i) => (
-              <tr key={i}>
-                <td className="pr-2 py-0.5">{id.identifier_type}</td>
-                <td className="pr-2 py-0.5 break-all">{id.identifier_value}</td>
-                <td className="py-0.5">{id.source}</td>
-              </tr>
+              <IdentifierRow key={i} identifier={id} />
             ))}
           </tbody>
         </table>

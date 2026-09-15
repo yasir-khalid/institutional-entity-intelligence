@@ -11,12 +11,21 @@ class EntityIdentifier(BaseModel):
     `confidence` carries whatever the source's own resolution process produced
     (a matcher Decision like AUTO_MATCH/REVIEW, or "SOURCE" for an identifier
     that came directly from a source's own authoritative data with no matching
-    step involved, e.g. GLEIF's ISIN bridge)."""
+    step involved, e.g. GLEIF's ISIN bridge).
+
+    source_file/snapshot_date/ingested_at are provenance, carried through
+    unchanged from whichever raw file/crosswalk run produced this identifier
+    (er.datasources.common.parquet_writer.PROVENANCE_FIELDS) - answers "where
+    did this come from, and as of when," not just "what is it."
+    """
 
     identifier_type: str
     identifier_value: str
     confidence: str
     source: str
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
 
 
 class Sec13FHoldingSummary(BaseModel):
@@ -38,6 +47,23 @@ class Sec13FActivity(BaseModel):
     top_reported_holdings: list[Sec13FHoldingSummary] = []
 
 
+class EntityLineage(BaseModel):
+    """GLEIF's own identity timeline for this entity - when it was created,
+    first registered, last updated, and next due for renewal, plus its
+    registration_status (e.g. ISSUED vs PENDING_VALIDATION). This data has
+    been sitting in gleif_entities.parquet since Phase 2 but never reached
+    the canonical entity layer or any consumer (CLI or API) before now -
+    "entity identity, lineage, provenance" is durable, high-value data that
+    deserves to actually be visible, not just captured at ingestion time."""
+
+    entity_creation_date: str | None = None
+    initial_registration_date: str | None = None
+    last_update_date: str | None = None
+    next_renewal_date: str | None = None
+    registration_status: str | None = None
+    gleif_snapshot_date: str | None = None
+
+
 class EntityProfile(BaseModel):
     """The single request-level view of a canonical entity - identity, every
     identifier attached to it by any registered source, its GLEIF relationship
@@ -51,6 +77,7 @@ class EntityProfile(BaseModel):
     jurisdiction: str | None = None
     legal_country: str | None = None
     entity_status: str | None = None
+    lineage: EntityLineage | None = None
     identifiers: list[EntityIdentifier] = []
     hierarchy: HierarchyResult | None = None
     sec_13f: Sec13FActivity | None = None

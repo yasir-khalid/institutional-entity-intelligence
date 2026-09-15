@@ -47,7 +47,18 @@ def build_entities(cfg: AppConfig) -> int:
                 entity_category AS entity_type,
                 jurisdiction,
                 legal_country,
-                entity_status
+                entity_status,
+                -- Lineage: GLEIF's own identity timeline for this entity, carried
+                -- through from gleif_entities.parquet (previously dropped here -
+                -- ingested since Phase 2 but never reached the canonical layer or
+                -- any CLI/API consumer). registration_status distinguishes e.g. an
+                -- ISSUED record from one still PENDING_VALIDATION.
+                entity_creation_date,
+                initial_registration_date,
+                last_update_date,
+                next_renewal_date,
+                registration_status,
+                snapshot_date AS gleif_snapshot_date
             FROM read_parquet('{entities_path}')
         ) TO '{out_path}' (FORMAT PARQUET)
     """)

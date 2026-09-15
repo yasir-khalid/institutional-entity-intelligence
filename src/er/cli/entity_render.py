@@ -122,10 +122,28 @@ def _render_sec_13f(console: Console, profile: EntityProfile) -> None:
     console.print(table)
 
 
+def _render_lineage(console: Console, profile: EntityProfile) -> None:
+    lineage = profile.lineage
+    if lineage is None:
+        return
+    parts = [
+        f"created {lineage.entity_creation_date[:10]}" if lineage.entity_creation_date else None,
+        f"registered {lineage.initial_registration_date[:10]}" if lineage.initial_registration_date else None,
+        f"last updated {lineage.last_update_date[:10]}" if lineage.last_update_date else None,
+        f"renewal due {lineage.next_renewal_date[:10]}" if lineage.next_renewal_date else None,
+    ]
+    line = " · ".join(p for p in parts if p)
+    if not line:
+        return
+    status = f" [{lineage.registration_status}]" if lineage.registration_status else ""
+    console.print(f"[dim]Lineage{status}: {line}[/dim]")
+
+
 def render(console: Console, profile: EntityProfile) -> None:
     console.print(f"\n[bold]{profile.canonical_name}[/bold]")
     console.print(f"Entity ID: {profile.entity_id}  |  Status: {profile.entity_status or 'unknown'}")
     console.print(f"Jurisdiction: {profile.jurisdiction or '-'}  |  Country: {profile.legal_country or '-'}")
+    _render_lineage(console, profile)
     _render_identifiers(console, profile)
     _render_relationships(console, profile)
     _render_sec_13f(console, profile)

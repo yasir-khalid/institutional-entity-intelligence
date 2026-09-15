@@ -47,6 +47,18 @@ class EntityIdentifierOut(BaseModel):
     identifier_value: str
     confidence: str
     source: str
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
+
+
+class EntityLineageOut(BaseModel):
+    entity_creation_date: str | None = None
+    initial_registration_date: str | None = None
+    last_update_date: str | None = None
+    next_renewal_date: str | None = None
+    registration_status: str | None = None
+    gleif_snapshot_date: str | None = None
 
 
 class Sec13FHoldingOut(BaseModel):
@@ -69,6 +81,7 @@ class EntityDetail(BaseModel):
     jurisdiction: str | None = None
     legal_country: str | None = None
     entity_status: str | None = None
+    lineage: EntityLineageOut | None = None
     identifiers: list[EntityIdentifierOut] = []
     sec_13f: Sec13FActivityOut | None = None
     parent_count: int = 0

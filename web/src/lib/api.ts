@@ -38,6 +38,18 @@ export interface EntityIdentifier {
   identifier_value: string;
   confidence: string;
   source: string;
+  source_file: string | null;
+  snapshot_date: string | null;
+  ingested_at: string | null;
+}
+
+export interface EntityLineage {
+  entity_creation_date: string | null;
+  initial_registration_date: string | null;
+  last_update_date: string | null;
+  next_renewal_date: string | null;
+  registration_status: string | null;
+  gleif_snapshot_date: string | null;
 }
 
 export interface Sec13FHolding {
@@ -60,6 +72,7 @@ export interface EntityDetail {
   jurisdiction: string | null;
   legal_country: string | null;
   entity_status: string | null;
+  lineage: EntityLineage | null;
   identifiers: EntityIdentifier[];
   sec_13f: Sec13FActivity | null;
   parent_count: number;

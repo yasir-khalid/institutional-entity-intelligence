@@ -51,6 +51,12 @@ _ENTITIES_SCHEMA = pa.schema(
         ("jurisdiction", pa.string()),
         ("legal_country", pa.string()),
         ("entity_status", pa.string()),
+        ("entity_creation_date", pa.string()),
+        ("initial_registration_date", pa.string()),
+        ("last_update_date", pa.string()),
+        ("next_renewal_date", pa.string()),
+        ("registration_status", pa.string()),
+        ("snapshot_date", pa.string()),
     ]
 )
 
@@ -65,6 +71,12 @@ def _write_entities(cfg):
                 "jurisdiction": "US-DE",
                 "legal_country": "US",
                 "entity_status": "ACTIVE",
+                "entity_creation_date": "2010-01-01",
+                "initial_registration_date": "2013-06-01",
+                "last_update_date": "2025-01-01",
+                "next_renewal_date": "2026-06-01",
+                "registration_status": "ISSUED",
+                "snapshot_date": "2026-01-01",
             },
             {
                 "lei": "LEI_B",
@@ -73,6 +85,12 @@ def _write_entities(cfg):
                 "jurisdiction": "KY",
                 "legal_country": "KY",
                 "entity_status": "ACTIVE",
+                "entity_creation_date": None,
+                "initial_registration_date": None,
+                "last_update_date": None,
+                "next_renewal_date": None,
+                "registration_status": "ISSUED",
+                "snapshot_date": "2026-01-01",
             },
         ],
         schema=_ENTITIES_SCHEMA,
@@ -90,6 +108,8 @@ def test_build_entities_seeds_one_row_per_gleif_lei(cfg):
     assert by_id["LEI_A"]["canonical_name"] == "Acme Capital LLC"
     assert by_id["LEI_A"]["primary_lei"] == "LEI_A"
     assert by_id["LEI_B"]["entity_type"] == "FUND"
+    assert by_id["LEI_A"]["initial_registration_date"] == "2013-06-01"
+    assert by_id["LEI_A"]["gleif_snapshot_date"] == "2026-01-01"
 
 
 def test_isin_source_returns_none_when_bridge_missing(cfg):
@@ -117,11 +137,41 @@ def test_build_identifiers_unions_available_sources_and_skips_unmatched(cfg):
 
     crosswalk_table = pa.Table.from_pylist(
         [
-            {"lei": "LEI_A", "cik": "0000001", "decision": "AUTO_MATCH"},
-            {"lei": "LEI_B", "cik": "0000002", "decision": "UNMATCHED"},
-            {"lei": None, "cik": "0000003", "decision": "UNMATCHED"},
+            {
+                "lei": "LEI_A",
+                "cik": "0000001",
+                "decision": "AUTO_MATCH",
+                "source_file": "sec_13f_filings.parquet",
+                "snapshot_date": "2026-01-01",
+                "ingested_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "lei": "LEI_B",
+                "cik": "0000002",
+                "decision": "UNMATCHED",
+                "source_file": "sec_13f_filings.parquet",
+                "snapshot_date": "2026-01-01",
+                "ingested_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "lei": None,
+                "cik": "0000003",
+                "decision": "UNMATCHED",
+                "source_file": "sec_13f_filings.parquet",
+                "snapshot_date": "2026-01-01",
+                "ingested_at": "2026-01-01T00:00:00+00:00",
+            },
         ],
-        schema=pa.schema([("lei", pa.string()), ("cik", pa.string()), ("decision", pa.string())]),
+        schema=pa.schema(
+            [
+                ("lei", pa.string()),
+                ("cik", pa.string()),
+                ("decision", pa.string()),
+                ("source_file", pa.string()),
+                ("snapshot_date", pa.string()),
+                ("ingested_at", pa.string()),
+            ]
+        ),
     )
     pq.write_table(crosswalk_table, cfg.sec_13f.processed_dir / "crosswalk_sec_13f_gleif.parquet")
 

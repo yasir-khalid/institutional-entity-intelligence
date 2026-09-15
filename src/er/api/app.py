@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from er.api.schemas import (
     EntityDetail,
     EntityIdentifierOut,
+    EntityLineageOut,
     Sec13FActivityOut,
     Sec13FHoldingOut,
     SearchResponse,
@@ -205,12 +206,27 @@ def entity_detail(entity_id: str) -> EntityDetail:
         jurisdiction=profile.jurisdiction,
         legal_country=profile.legal_country,
         entity_status=profile.entity_status,
+        lineage=(
+            EntityLineageOut(
+                entity_creation_date=profile.lineage.entity_creation_date,
+                initial_registration_date=profile.lineage.initial_registration_date,
+                last_update_date=profile.lineage.last_update_date,
+                next_renewal_date=profile.lineage.next_renewal_date,
+                registration_status=profile.lineage.registration_status,
+                gleif_snapshot_date=profile.lineage.gleif_snapshot_date,
+            )
+            if profile.lineage
+            else None
+        ),
         identifiers=[
             EntityIdentifierOut(
                 identifier_type=i.identifier_type,
                 identifier_value=i.identifier_value,
                 confidence=i.confidence,
                 source=i.source,
+                source_file=i.source_file,
+                snapshot_date=i.snapshot_date,
+                ingested_at=i.ingested_at,
             )
             for i in profile.identifiers
         ],

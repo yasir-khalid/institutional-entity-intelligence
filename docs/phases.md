@@ -669,3 +669,55 @@ centered search bar before any search, a name/LEI/CUSIP search transitions to
 the results+tree+details layout, and expanding one branch of the tree
 (screenshotted at `/tmp/tree.png` during verification) reveals only that
 branch's own children while all sibling cards stay untouched.
+
+## Phase 16: surface lineage and provenance in the UI
+
+GLEIF's own identity timeline for an entity (`entity_creation_date`,
+`initial_registration_date`, `last_update_date`, `next_renewal_date`,
+`registration_status`) has been sitting in `gleif_entities.parquet` since
+Phase 2, and every identifier's provenance (`source_file`, `snapshot_date`,
+`ingested_at`) has been on every source table since it was first written via
+`BatchedParquetWriter` - but neither ever reached the canonical entity layer,
+the API, or any CLI/web consumer. "Entity identity, lineage, provenance" is
+durable, foundational data; capturing it at ingestion time and never
+surfacing it anywhere was a real gap, not a missing nice-to-have.
+
+Threaded through the full stack, each layer additive and backward compatible:
+
+- `er.entity.build.build_entities()`: `entities.parquet` now also carries the
+  five GLEIF lineage columns plus the ingestion snapshot date.
+- `er.entity.sources`: every identifier source's SQL now selects
+  `source_file, snapshot_date, ingested_at` alongside the existing five
+  columns - the contract every future source function follows is now eight
+  columns, not five.
+- `er.entity.models`: new `EntityLineage` model; `EntityIdentifier` gains the
+  three provenance fields.
+- `er.entity.profile.get_entity_profile()`: loads and returns both.
+- `er.api.schemas`/`app.py`: `EntityLineageOut`, extended `EntityIdentifierOut`,
+  `EntityDetail.lineage` - the web API now returns all of it.
+- `er.cli.entity_render`: one new dim line ("Lineage [ISSUED]: created ... ·
+  registered ... · last updated ... · renewal due ...") - the CLI benefits
+  from the same backend change with a two-line addition.
+- `web/src/components/LineageTimeline.tsx`: a small four-point timeline
+  (Created → Registered → Last updated → Renewal due) with a registration-
+  status badge, rendered in a bordered card in the details panel.
+- `web/src/components/DetailsPanel.tsx`: each identifier row is now
+  expandable (▸/▾, click to toggle) to reveal its own provenance - source
+  file, snapshot date, ingestion timestamp, confidence - without cluttering
+  the compact table when collapsed.
+
+### Verify
+
+```bash
+uv run pytest                                        # 147 passing (fixtures updated for the new columns)
+make build-entities                                   # rebuild entities.parquet + entity_identifiers.parquet
+uv run python -m er.cli.entity --lei 549300TITGLG7BXCGB39   # shows the new Lineage line
+curl "http://localhost:8000/api/entity/549300TITGLG7BXCGB39" | python3 -m json.tool | head -20
+```
+
+Confirmed live with real screenshots: the details panel shows a lineage
+timeline with real dates (Created 1 Oct 2019, Registered 22 Jan 2020, Last
+updated 23 Jul 2026, Renewal due 12 Aug 2027, status ISSUED) and clicking the
+CIK identifier row expands to show its source file
+(`sec_13f_filings.parquet`), snapshot date, ingestion timestamp, and
+confidence (`AUTO_MATCH`).
