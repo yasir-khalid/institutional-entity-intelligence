@@ -16,6 +16,15 @@ const DECISION_LABEL: Record<string, string> = {
   UNMATCHED: "Unmatched",
 };
 
+/* Column widths live here, once, and every row renders every cell - including
+ * an empty one where a row has no decision badge. That is the whole point:
+ * with a conditionally-rendered cell, a single badged row pushes its
+ * neighbours' jurisdiction and LEI left by the badge's width, and the table
+ * stops lining up down the page. */
+const COL_JURISDICTION = "w-16";
+const COL_IDENTIFIER = "w-[11.5rem]";
+const COL_DECISION = "w-[6.75rem]";
+
 export default function ResultsList({
   results,
   onSelect,
@@ -47,35 +56,33 @@ export default function ResultsList({
                 <Building2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               </span>
 
-              {/* Columns, not a stacked block: the identifier and jurisdiction
-                  line up down the list so the eye can scan one field at a time
-                  across ten near-identical legal names. */}
-              <span className="text-ink min-w-0 flex-1 truncate text-[13px] font-medium">
-                {r.canonical_name}
+              {/* Columns, not a stacked block: jurisdiction, identifier and
+                  decision line up down the list so the eye can scan one field
+                  at a time across ten near-identical legal names. */}
+              <span className="text-ink min-w-0 flex-1 truncate text-[13px] font-medium">{r.canonical_name}</span>
+
+              <span className={`text-ink-muted hidden shrink-0 text-[11.5px] sm:block ${COL_JURISDICTION}`}>
+                {unresolved ? "—" : (r.jurisdiction ?? "—")}
               </span>
 
               {unresolved ? (
-                <span className="text-ink-subtle shrink-0 text-[11px]">
-                  CIK {r.cik} · not resolved to a GLEIF LEI
+                <span
+                  className={`text-ink-subtle hidden shrink-0 truncate text-[11px] md:block ${COL_IDENTIFIER}`}
+                  title={`CIK ${r.cik} · not resolved to a GLEIF LEI`}
+                >
+                  CIK {r.cik} · unresolved
                 </span>
               ) : (
-                <>
-                  <span className="text-ink-muted hidden w-14 shrink-0 text-[11.5px] sm:block">
-                    {r.jurisdiction ?? "—"}
-                  </span>
-                  <Mono className="text-ink-subtle hidden w-[13.5rem] shrink-0 md:block">{r.entity_id}</Mono>
-                </>
+                <Mono className={`text-ink-subtle hidden shrink-0 md:block ${COL_IDENTIFIER}`}>{r.entity_id}</Mono>
               )}
 
-              {/* Only the adjudicated decision is surfaced. The raw retrieval
-                  score is deliberately not shown: it is an unnormalised BM25
-                  value, so a bare "40" means nothing to a reader and the list
-                  is already ordered by it. */}
-              {r.decision && (
-                <Badge variant={DECISION_VARIANT[r.decision] ?? "neutral"}>
-                  {DECISION_LABEL[r.decision] ?? r.decision}
-                </Badge>
-              )}
+              <span className={`flex shrink-0 justify-end ${COL_DECISION}`}>
+                {r.decision && (
+                  <Badge variant={DECISION_VARIANT[r.decision] ?? "neutral"}>
+                    {DECISION_LABEL[r.decision] ?? r.decision}
+                  </Badge>
+                )}
+              </span>
 
               <ChevronRight
                 className="text-ink-faint group-hover:text-ink-subtle h-4 w-4 shrink-0 transition-colors"

@@ -29,13 +29,17 @@ a separate pipeline.
    **LEI**, or **Security ID (CUSIP)**.
 2. A single unambiguous result (or a confident `AUTO_MATCH`) jumps straight to
    the relationship tree. Otherwise the results take the whole screen as an
-   aligned table - name, jurisdiction, LEI - so ten near-identical legal names
-   can be compared one column at a time. The raw retrieval score is
+   aligned table - name, jurisdiction, LEI, decision - so ten near-identical
+   legal names can be compared one column at a time. Every row renders every
+   cell, including an empty decision cell, so one badged row never pushes its
+   neighbours' columns out of line. The raw retrieval score is
    deliberately not shown: it is an unnormalised BM25 value that means nothing
    to a reader, and the list is already ordered by it.
 3. Picking a result opens the workspace: the results collapse to a capped
    strip at the top, and the tree and details panes appear side by side as two
-   cards with identical header bars.
+   cards with identical header bars. When the strip has more rows than fit, a
+   scroll control appears on its bottom edge and disappears once you reach the
+   end.
 4. The tree renders as a plain indented list - deliberately not a
    node-and-edge graph - one full-width row per entity with a continuous
    indent guide per level. An upward green arrow marks a parent/manager, a
@@ -78,6 +82,7 @@ src/
 │   │                            tree, renders it as a plain indented list
 │   │                            with per-branch collapse state
 │   ├── LineageTimeline.tsx    # four-point GLEIF identity timeline
+│   ├── ScrollPane.tsx         # height-capped scroller + "more below" control
 │   ├── Skeletons.tsx          # loading placeholders that mirror real geometry
 │   └── DetailsPanel.tsx       # renders EntityDetail JSON
 └── lib/api.ts                 # typed fetch client - mirrors src/er/api/schemas.py exactly
@@ -87,10 +92,13 @@ src/
 
 Deliberately small, so the UI stays coherent without a component library:
 
-- **Type**: two families only - Inter for prose and UI, JetBrains Mono for
-  identifiers (LEI, CIK, CUSIP). Every figure that a reader might compare down
-  a column - dates, counts, dollar values, IDs - carries `.tabular`
-  (`font-variant-numeric: tabular-nums`) so digits line up.
+- **Type**: one superfamily - IBM Plex Sans for UI, IBM Plex Mono for
+  identifiers (LEI, CIK, CUSIP). They were drawn together and share vertical
+  metrics, so an identifier sits on the same baseline as the label beside it,
+  and Plex was designed for dense technical interfaces rather than being a
+  default. Every figure a reader might compare down a column - dates, counts,
+  dollar values, IDs - carries `.tabular` (`font-variant-numeric: tabular-nums`)
+  so digits line up.
 - **Colour**: named tokens in `globals.css`, not per-component slates. Text is
   a four-step ramp - `ink` (headings, values), `ink-muted` (body), `ink-subtle`
   (labels, identifiers), `ink-faint` (decoration only, never text) - and every
@@ -99,6 +107,11 @@ Deliberately small, so the UI stays coherent without a component library:
   (`upward` = parent/manager, `downward` = subsidiary/fund); amber and rose are
   reserved for caveats and errors.
 - **Icons**: `lucide-react` throughout - no emoji anywhere in the UI.
+- **Loading**: motion lives in exactly one place - a 2px indeterminate line at
+  the top of the pane. The placeholders under it never animate and reproduce
+  the real geometry column for column (same 44px rows, same jurisdiction /
+  identifier / decision widths, same tree indent depths), so a load previews
+  the layout that is arriving instead of decorating the wait.
 - **Alignment**: the tree and details panes are cards with identical 44px
   header bars, so their frames, headings and content start on the same
   baseline; label/value pairs use one shared `FieldGrid` column width. The

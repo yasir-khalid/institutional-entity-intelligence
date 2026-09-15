@@ -8,6 +8,7 @@ import EntityTreeView from "@/components/EntityTreeView";
 import DetailsPanel from "@/components/DetailsPanel";
 import HowItWorks from "@/components/HowItWorks";
 import WhyItMatters from "@/components/WhyItMatters";
+import ScrollPane from "@/components/ScrollPane";
 import { ResultsSkeleton, TreeSkeleton } from "@/components/Skeletons";
 import { SectionLabel } from "@/components/ui";
 import {
@@ -198,17 +199,17 @@ export default function Home() {
         // name can return 10+ legal entities) grows until it squeezes the
         // workspace below it to zero height, making the tree and details
         // invisible even though they rendered.
-        <div className="border-line bg-surface relative shrink-0 border-b">
-          <div className="scroll-thin max-h-[13.5rem] overflow-y-auto px-5 pt-3.5 pb-5">
+        <ScrollPane
+          className="border-line bg-surface shrink-0 border-b"
+          contentClassName="max-h-[13.5rem] px-5 pt-3.5 pb-5"
+        >
+          <div>
             <div className="mb-2.5">
               <SectionLabel>{searching ? "Searching" : `${results?.length ?? 0} results`}</SectionLabel>
             </div>
             {searching ? <ResultsSkeleton /> : results && <ResultsList results={results} onSelect={loadTree} />}
           </div>
-          {/* Fades the last visible row instead of slicing it flat, so it reads
-              as "more below" rather than as a clipping bug. */}
-          <div className="from-surface pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t to-transparent" />
-        </div>
+        </ScrollPane>
       )}
 
       {/* Both panes are cards with an identical 44px titled header bar, so
@@ -266,7 +267,10 @@ export default function Home() {
             <SectionLabel icon={<Building2 className="h-3 w-3" strokeWidth={2} />}>Entity</SectionLabel>
           </div>
           <div className="min-h-0 flex-1">
-            <DetailsPanel detail={detail} loading={detailLoading} error={detailError} />
+            {/* treeLoading counts as loading here: loadTree fetches the tree
+                and then immediately loads the root entity, so without this the
+                panel flashes "select an entity" for the whole tree fetch. */}
+            <DetailsPanel detail={detail} loading={detailLoading || treeLoading} error={detailError} />
           </div>
         </aside>
       </main>

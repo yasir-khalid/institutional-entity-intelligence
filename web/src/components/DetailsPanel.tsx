@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   Building2,
   ChevronDown,
@@ -75,24 +75,62 @@ function Section({
   );
 }
 
+/** Mirrors this panel's own structure - header block, six-row field grid,
+ * lineage card, identifier rows - with the one moving element being the
+ * progress line at the top. See Skeletons.tsx for the reasoning. */
 function DetailsSkeleton() {
+  const fieldValueWidths = ["3.5rem", "5rem", "2.5rem", "2rem", "1rem", "1rem"];
+
   return (
-    <div className="flex flex-col gap-5 p-5">
-      <div className="flex flex-col gap-2">
-        <Bar className="h-5 w-3/4" />
-        <Bar className="h-3 w-2/5" />
+    <div className="h-full">
+      <div className="progress-line" />
+
+      <div className="flex items-start gap-2.5 px-5 pt-4 pb-4">
+        <Bar className="mt-0.5 h-8 w-8 shrink-0 rounded-lg" />
+        <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
+          <Bar className="h-3 w-3/5" />
+          <Bar className="h-2.5 w-[9rem]" />
+        </div>
       </div>
-      <div className="grid grid-cols-[7.5rem_1fr] gap-x-4 gap-y-2.5">
-        {Array.from({ length: 10 }).map((_, i) => (
-          <Bar key={i} className="h-3" />
-        ))}
+
+      <div className="border-line-soft border-t px-5 py-4">
+        <Bar className="h-2.5 w-20" />
+        <dl className="mt-3.5 grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-4 gap-y-3">
+          {fieldValueWidths.map((w, i) => (
+            <Fragment key={i}>
+              <Bar className="h-2.5 w-[4.5rem]" />
+              <Bar className="h-2.5" style={{ width: w }} />
+            </Fragment>
+          ))}
+        </dl>
       </div>
-      <Bar className="h-20 w-full rounded-lg" />
-      <div className="flex flex-col gap-2">
-        <Bar className="h-3 w-24" />
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Bar key={i} className="h-3.5 w-full" />
-        ))}
+
+      <div className="border-line-soft border-t px-5 py-4">
+        <Bar className="h-2.5 w-16" />
+        <div className="border-line mt-3.5 rounded-xl border px-4 py-3.5">
+          <div className="flex">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex flex-1 flex-col items-center gap-2">
+                <Bar className="h-[7px] w-[7px] rounded-full" />
+                <Bar className="h-2 w-12" />
+                <Bar className="h-2.5 w-16" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-line-soft border-t px-5 py-4">
+        <Bar className="h-2.5 w-20" />
+        <div className="divide-line-soft mt-1 divide-y">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="flex h-9 items-center gap-2">
+              <span className="w-4 shrink-0" />
+              <Bar className="h-2.5 w-7 shrink-0" />
+              <Bar className="h-2.5 w-[9rem]" />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

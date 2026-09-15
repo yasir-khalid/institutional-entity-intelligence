@@ -829,3 +829,64 @@ scroll is locked while open, and focus returns to the trigger.
 ```bash
 cd web && npx tsc --noEmit && npm run build   # both clean
 ```
+
+---
+
+## Phase 19: column alignment, a scroll affordance, and non-generic loading
+
+Four defects, all reported from screenshots of the running app.
+
+### Columns that only looked aligned
+
+`ResultsList` rendered the decision badge conditionally. Because the name cell
+is `flex-1` and absorbs the slack, the trailing cells are laid out from the
+right - so a single row carrying an `AUTO MATCH` badge pushed *its own*
+jurisdiction and LEI left by the badge's width while every other row's stayed
+put. The table lined up everywhere except the one row a reader looks at first.
+
+Fixed by giving each trailing cell a fixed width declared once at the top of
+the file (`COL_JURISDICTION`, `COL_IDENTIFIER`, `COL_DECISION`) and rendering
+every cell on every row - the decision cell is simply empty when there is no
+decision. Unresolved CIK rows now fill the same two cells rather than
+substituting one wide span.
+
+### A clipped list that looked like a bug
+
+The capped results strip had only a gradient fade, which does not actually
+tell you there is more below. New `ScrollPane` component: caps the height,
+tracks scroll position with a `ResizeObserver` (content height changes without
+firing a scroll event when results arrive), and shows a control straddling the
+pane's bottom edge - out of the rows' way - that scrolls a page and disappears
+at the end.
+
+### Loading states that looked machine-generated
+
+The previous skeletons were the default treatment: randomly-sized grey bars
+pulsing in unison. Replaced with two rules:
+
+1. **Motion lives in one place** - a 2px indeterminate line at the top of the
+   pane (`.progress-line`). Placeholders never animate.
+2. **Placeholders reproduce the real geometry** - the same 44px rows, the same
+   column widths as `ResultsList`, the same tree indent depths *with the indent
+   guides actually drawn*, and a details skeleton that mirrors its own panel
+   (header block, six-row field grid, four-point lineage card, identifier
+   rows). Widths are a fixed pattern, not randomised: randomised widths are
+   what read as a shimmer rather than as a table.
+
+### Typography
+
+Inter + JetBrains Mono replaced with **IBM Plex Sans + IBM Plex Mono** - one
+superfamily drawn together with shared vertical metrics, designed for dense
+technical interfaces, rather than two independently-chosen defaults.
+
+### Also fixed
+
+The details pane showed its "select an entity" empty state for the whole
+duration of the tree fetch, even though `loadTree` loads the root entity
+immediately afterwards. It now treats `treeLoading` as loading too.
+
+### Verify
+
+```bash
+cd web && npx tsc --noEmit && npm run build   # both clean
+```

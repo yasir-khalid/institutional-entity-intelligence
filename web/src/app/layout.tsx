@@ -1,18 +1,23 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 
-// Inter for UI text, JetBrains Mono for identifiers (LEI/CIK/CUSIP/ISIN).
-// Identifiers are codes, not prose - rendering them in a monospace face with
-// tabular figures makes them scannable and keeps columns of them aligned.
-const inter = Inter({
+/* One superfamily rather than two unrelated Google fonts. IBM Plex Sans and
+ * IBM Plex Mono were drawn together, share skeletons and vertical metrics, and
+ * were designed for exactly this context - dense technical and financial
+ * interfaces - so an identifier set in the mono sits on the same baseline and
+ * reads at the same weight as the label beside it. Identifiers are codes, not
+ * prose: monospace with tabular figures keeps a column of LEIs scannable. */
+const sans = IBM_Plex_Sans({
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
   display: "swap",
   variable: "--font-sans",
 });
 
-const mono = JetBrains_Mono({
+const mono = IBM_Plex_Mono({
   subsets: ["latin"],
+  weight: ["400", "500"],
   display: "swap",
   variable: "--font-mono",
 });
@@ -24,7 +29,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${inter.variable} ${mono.variable} h-full antialiased`}>
+    <html lang="en" className={`${sans.variable} ${mono.variable} h-full antialiased`}>
       <body className="h-full font-sans">{children}</body>
     </html>
   );
