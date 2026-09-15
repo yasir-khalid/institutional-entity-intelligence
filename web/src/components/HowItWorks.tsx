@@ -25,60 +25,60 @@ const STEPS = [
   },
 ];
 
-const AUTO_ADVANCE_MS = 3200;
-
 export default function HowItWorks() {
-  const [index, setIndex] = useState(0);
-  const [paused, setPaused] = useState(false);
-
+  const [active, setActive] = useState(0);
+  // Draws the connecting line in on mount rather than having it appear
+  // instantly - a small touch that makes the "flow" read as a flow.
+  const [lineDrawn, setLineDrawn] = useState(false);
   useEffect(() => {
-    if (paused) return;
-    const t = setInterval(() => setIndex((i) => (i + 1) % STEPS.length), AUTO_ADVANCE_MS);
-    return () => clearInterval(t);
-  }, [paused]);
+    const t = setTimeout(() => setLineDrawn(true), 50);
+    return () => clearTimeout(t);
+  }, []);
 
   return (
-    <div
-      className="w-full max-w-md"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-    >
-      <h2 className="mb-3 text-center text-xs font-semibold uppercase tracking-widest text-slate-400">
+    <div className="w-full max-w-2xl">
+      <h2 className="mb-6 text-center text-xs font-semibold uppercase tracking-widest text-slate-400">
         How it works
       </h2>
 
-      <div className="relative h-40 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="relative flex items-start justify-between px-2">
+        {/* Connecting line sits behind the circles, spanning center-to-center
+            of the first and last step - drawn in via a scaleX transition. */}
         <div
-          className="flex h-full transition-transform duration-500 ease-out"
-          style={{ transform: `translateX(-${index * 100}%)` }}
-        >
-          {STEPS.map((step, i) => (
-            <div
+          className="absolute top-6 right-[12.5%] left-[12.5%] h-0.5 origin-left bg-slate-200 transition-transform duration-700 ease-out"
+          style={{ transform: lineDrawn ? "scaleX(1)" : "scaleX(0)" }}
+        />
+
+        {STEPS.map((step, i) => {
+          const isActive = i === active;
+          return (
+            <button
               key={step.title}
-              className="flex w-full shrink-0 flex-col items-center justify-center gap-1.5 px-8 text-center"
+              onMouseEnter={() => setActive(i)}
+              onFocus={() => setActive(i)}
+              className="group relative z-10 flex flex-1 flex-col items-center gap-2 text-center"
             >
-              <span className="text-2xl">{step.icon}</span>
-              <div className="text-sm font-semibold text-slate-900">
-                <span className="mr-1.5 text-slate-300">{i + 1}.</span>
-                {step.title}
+              <span
+                className={`flex h-12 w-12 items-center justify-center rounded-full border-2 bg-white text-xl transition-all duration-200 ${
+                  isActive
+                    ? "scale-110 border-blue-600 shadow-md shadow-blue-100"
+                    : "border-slate-200 group-hover:border-slate-300"
+                }`}
+              >
+                {step.icon}
+              </span>
+              <div className={`text-xs font-semibold transition-colors ${isActive ? "text-blue-600" : "text-slate-500"}`}>
+                {i + 1}. {step.title}
               </div>
-              <p className="text-xs leading-snug text-slate-500">{step.desc}</p>
-            </div>
-          ))}
-        </div>
+            </button>
+          );
+        })}
       </div>
 
-      <div className="mt-3 flex justify-center gap-1.5">
-        {STEPS.map((step, i) => (
-          <button
-            key={step.title}
-            onClick={() => setIndex(i)}
-            aria-label={`Go to step ${i + 1}: ${step.title}`}
-            className={`h-1.5 rounded-full transition-all duration-300 ${
-              i === index ? "w-5 bg-blue-600" : "w-1.5 bg-slate-300 hover:bg-slate-400"
-            }`}
-          />
-        ))}
+      <div className="mx-auto mt-5 h-10 max-w-sm text-center">
+        <p key={active} className="animate-fade-in-up text-xs leading-snug text-slate-500">
+          {STEPS[active].desc}
+        </p>
       </div>
     </div>
   );
