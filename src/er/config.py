@@ -100,6 +100,20 @@ class FamilyConfig(BaseModel):
     candidate_pool_size: int = 100
 
 
+class AgentConfig(BaseModel):
+    # OpenRouter (https://openrouter.ai) model id - deepseek/deepseek-v4.1-flash
+    # is fast/cheap and strong at structured tool-calling over data lookups
+    # like these; swap here (not in code) to retune.
+    openrouter_model: str = "deepseek/deepseek-v4.1-flash"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # How the FastAPI app (and er.cli.ask) spawn the MCP server subprocess -
+    # see er.agent.mcp_server. Kept as a command list, not a code path, so a
+    # future deployment can point at a different interpreter/entrypoint
+    # without a code change.
+    mcp_server_command: list[str] = ["uv", "run", "python", "-m", "er.cli.mcp_server"]
+    max_tool_turns: int = 6
+
+
 class AppConfig(BaseModel):
     gleif: GleifConfig
     sec_13f: Sec13FConfig
@@ -109,6 +123,7 @@ class AppConfig(BaseModel):
     benchmark: BenchmarkConfig
     matching: MatchingConfig = MatchingConfig()
     family: FamilyConfig = FamilyConfig()
+    agent: AgentConfig = AgentConfig()
 
     @property
     def opensearch_url(self) -> str:
@@ -118,6 +133,15 @@ class AppConfig(BaseModel):
                 "OPENSEARCH_URL is not set. Copy .env.example to .env and fill it in."
             )
         return url
+
+    @property
+    def openrouter_api_key(self) -> str:
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is not set. Copy .env.example to .env and fill it in."
+            )
+        return key
 
 
 @lru_cache

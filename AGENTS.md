@@ -18,7 +18,8 @@ src/er/
 │                             entity_render.py for its rendering),
 │                             ingest_gleif.py, ingest_sec_13f.py, index.py,
 │                             validate.py, benchmark.py, evaluate.py,
-│                             crosswalk_sec_13f.py, build_entities.py.
+│                             crosswalk_sec_13f.py, build_entities.py,
+│                             mcp_server.py, ask.py.
 ├── datasources/<source>/   # one folder per data source (gleif, sec_13f, ...) -
 │                             owns its OWN raw-file parsing, pydantic models,
 │                             pyarrow schema, and ingest.py end to end. Each
@@ -60,6 +61,23 @@ src/er/
 │                             GLEIF relationships + SEC 13F activity). CLI:
 │                             er.cli.entity (rendering in er.cli.entity_render);
 │                             build.py's run_all() has its own CLI: er.cli.build_entities.
+├── agent/                      # entity Q&A: mcp_server.py is a real, standalone
+│                             MCP server (search_entity, get_entity_profile,
+│                             get_relationship_hierarchy - each a thin wrapper
+│                             over er.entity.search/profile and er.graph.build,
+│                             unchanged) that any MCP client can talk to.
+│                             tools.py builds the Evidence for every tool call -
+│                             deterministic provenance (source, criteria, record
+│                             refs, a reproducible query_hash), never an
+│                             LLM-invented confidence score, since there is no
+│                             document corpus here to cite RAG-style.
+│                             orchestrator.py drives an OpenRouter model through
+│                             those tools as a genuine MCP client (stdio, not a
+│                             direct Python import) until it calls a final
+│                             submit_answer tool with citations restricted to
+│                             evidence_ids the conversation actually produced.
+│                             CLI: er.cli.mcp_server (runs the server),
+│                             er.cli.ask (terminal Q&A harness).
 ├── benchmark/                  # auto-generates evaluation_pairs.parquet from
 │                             the ISIN<->LEI bridge + intra-GLEIF confusable
 │                             pairs. No manual labeling. CLI: er.cli.benchmark.

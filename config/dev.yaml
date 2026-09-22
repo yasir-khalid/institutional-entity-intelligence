@@ -33,6 +33,14 @@ benchmark:
   min_core_tokens: 3
   max_confusable_group_size: 10
 
+# Entity Q&A agent (er.agent) - the API key itself lives only in .env
+# (OPENROUTER_API_KEY), never here.
+agent:
+  openrouter_model: deepseek/deepseek-v4.1-flash
+  openrouter_base_url: https://openrouter.ai/api/v1
+  mcp_server_command: ["uv", "run", "python", "-m", "er.cli.mcp_server"]
+  max_tool_turns: 6
+
 # Deterministic matcher tuning - change these to retune scoring without touching code.
 matching:
   candidate_pool_size: 20

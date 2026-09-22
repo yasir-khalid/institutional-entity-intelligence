@@ -60,7 +60,7 @@ function in `src/er/entity/sources.py` pointing at your crosswalk's output. See
 ```bash
 brew install libpostal   # macOS; ships its own trained model data
 CFLAGS="-I/opt/homebrew/include" LDFLAGS="-L/opt/homebrew/lib" uv sync
-cp .env.example .env     # fill in OPENSEARCH_URL
+cp .env.example .env     # fill in OPENSEARCH_URL (OPENROUTER_API_KEY only needed for `er.cli.ask`/the web "Ask" section)
 ```
 
 **Data pipeline** (once, or after refreshing raw source files):
@@ -97,6 +97,12 @@ uv run python -m er.cli.family --name "Point72"
 # Crosswalk SEC 13F filers to GLEIF LEIs, then rebuild the canonical entity layer
 make crosswalk-sec-13f
 make build-entities
+
+# Ask a question about an entity - a real MCP server (search_entity,
+# get_entity_profile, get_relationship_hierarchy) wired to an OpenRouter model,
+# answering with citations to deterministic Evidence records, not a document
+# corpus. Requires OPENROUTER_API_KEY in .env.
+uv run python -m er.cli.ask --entity-id 254900ESP1ZKG7UNS007 --question "What is its registration status?"
 ```
 
 Every CLI lives under `er.cli` (`python -m er.cli.<name>`) - a deliberate
@@ -108,7 +114,9 @@ took.
 
 **Web UI**: a Next.js frontend (`web/`) over a thin FastAPI backend
 (`src/er/api/`) - search by name/LEI/CUSIP, browse a depth-2 relationship tree,
-click any node for its full profile. Same core logic, a different view:
+click any node for its full profile, and ask it a question ("Ask" section in
+the details panel) with citations resolved through an "Evidence layer" panel
+instead of raw traces. Same core logic, a different view:
 
 ```bash
 make api                 # FastAPI backend on :8000
@@ -151,6 +159,12 @@ src/er/
 ├── entity/                 # canonical entity layer: one entity, identifiers
 │                             from every source (er.cli.entity) - see sources.py
 │                             to add a new source's identifiers with one function
+├── agent/                  # entity Q&A: a standalone MCP server (search_entity,
+│                             get_entity_profile, get_relationship_hierarchy)
+│                             plus an OpenRouter tool-calling orchestrator that
+│                             is genuinely wired to it over the MCP protocol
+│                             (er.cli.mcp_server, er.cli.ask) - every tool
+│                             returns deterministic Evidence, not RAG chunks
 ├── evaluation/             # benchmark scoring + failure-analysis metrics
 └── benchmark/              # auto-generated evaluation pairs
 

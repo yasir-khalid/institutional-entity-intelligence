@@ -74,6 +74,35 @@ class Sec13FActivityOut(BaseModel):
     top_reported_holdings: list[Sec13FHoldingOut] = []
 
 
+class EvidenceOut(BaseModel):
+    evidence_id: str
+    source: str
+    source_timestamp: str | None = None
+    fact_type: str
+    criteria: list[str] = []
+    record_refs: list[str] = []
+    fields_used: list[str] = []
+    result_count: int | None = None
+    query_hash: str
+    warnings: list[str] = []
+
+
+class CitationOut(BaseModel):
+    marker: int
+    evidence_id: str
+
+
+class AskRequest(BaseModel):
+    question: str
+    entity_id: str | None = None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    citations: list[CitationOut] = []
+    evidence: dict[str, EvidenceOut] = {}
+
+
 class EntityDetail(BaseModel):
     entity_id: str
     canonical_name: str
