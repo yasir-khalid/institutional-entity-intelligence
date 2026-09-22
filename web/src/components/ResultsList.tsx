@@ -50,7 +50,7 @@ export default function ResultsList({
             <button
               onClick={() => onSelect(r.entity_id)}
               disabled={unresolved}
-              className="group hover:bg-canvas/60 flex h-11 w-full items-center gap-3 px-3.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+              className="group hover:bg-canvas/60 focus-visible:ring-accent focus-visible:ring-inset flex min-h-14 w-full items-center gap-3 px-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent sm:h-11 sm:min-h-0"
             >
               <span className="bg-canvas text-ink-subtle group-hover:bg-accent-soft group-hover:text-accent group-disabled:group-hover:bg-canvas group-disabled:group-hover:text-ink-subtle flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors">
                 <Building2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -59,7 +59,16 @@ export default function ResultsList({
               {/* Columns, not a stacked block: jurisdiction, identifier and
                   decision line up down the list so the eye can scan one field
                   at a time across ten near-identical legal names. */}
-              <span className="text-ink min-w-0 flex-1 truncate text-[13px] font-medium">{r.canonical_name}</span>
+              <span className="min-w-0 flex-1">
+                <span className="text-ink block truncate text-[13px] font-medium">{r.canonical_name}</span>
+                <span className="text-ink-subtle mt-0.5 block truncate text-[11px] sm:hidden">
+                  {unresolved
+                    ? `CIK ${r.cik} · unresolved`
+                    : [r.jurisdiction ?? r.legal_country, r.decision ? (DECISION_LABEL[r.decision] ?? r.decision) : "Candidate"]
+                        .filter(Boolean)
+                        .join(" · ")}
+                </span>
+              </span>
 
               <span className={`text-ink-muted hidden shrink-0 text-[11.5px] sm:block ${COL_JURISDICTION}`}>
                 {unresolved ? "—" : (r.jurisdiction ?? "—")}

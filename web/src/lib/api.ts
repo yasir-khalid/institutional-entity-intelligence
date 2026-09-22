@@ -79,6 +79,52 @@ export interface EntityDetail {
   subsidiary_count: number;
 }
 
+/* ---------------------------------------------------------------------------
+   The entity Q&A agent (er.agent) - not RAG-style text chunks, since there is
+   no document corpus here: each Evidence entry is a deterministic provenance
+   record a tool call constructed from the exact lookup it just ran (source,
+   criteria, record count, timestamp, reproducible query hash), never an
+   LLM-invented confidence score. See er.agent.models.Evidence.
+--------------------------------------------------------------------------- */
+
+export interface Evidence {
+  evidence_id: string;
+  source: string;
+  source_timestamp: string | null;
+  fact_type: string;
+  criteria: string[];
+  record_refs: string[];
+  fields_used: string[];
+  result_count: number | null;
+  query_hash: string;
+  warnings: string[];
+}
+
+export interface Citation {
+  marker: number;
+  evidence_id: string;
+}
+
+export interface AskResponse {
+  answer: string;
+  citations: Citation[];
+  evidence: Record<string, Evidence>;
+}
+
+/** One progress event emitted while the agent researches, mirrored from
+ * er.agent.orchestrator.ProgressEvent (see er/api/app.py's /api/ask/stream). */
+export interface AskStreamEvent {
+  type: "status" | "tool_call" | "tool_result" | "answer" | "error";
+  message?: string;
+  tool?: string;
+  source?: string | null;
+  count?: number | null;
+  evidence_ids?: string[];
+  answer?: string;
+  citations?: Citation[];
+  evidence?: Record<string, Evidence>;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_URL}${path}`);
   if (!res.ok) {
@@ -100,4 +146,63 @@ export function getEntityTree(entityId: string, depth = 2): Promise<TreeNode> {
 
 export function getEntityDetail(entityId: string): Promise<EntityDetail> {
   return getJson(`/api/entity/${encodeURIComponent(entityId)}`);
+}
+
+export async function askQuestion(question: string, entityId: string | null): Promise<AskResponse> {
+  const res = await fetch(`${API_URL}/api/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, entity_id: entityId }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+  }
+  return res.json() as Promise<AskResponse>;
+}
+
+/** Same answer as askQuestion, but consumes /api/ask/stream's Server-Sent
+ * Events so the caller can render progress (`onEvent`) instead of waiting on a
+ * blank spinner. Resolves with the final answer, or throws on an error event. */
+export async function askQuestionStream(
+  question: string,
+  entityId: string | null,
+  onEvent: (event: AskStreamEvent) => void,
+): Promise<AskResponse> {
+  const res = await fetch(`${API_URL}/api/ask/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, entity_id: entityId }),
+  });
+  if (!res.ok || !res.body) {
+    const body = await res.text();
+    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let final: AskResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const line = frame.split("\n").find((entry) => entry.startsWith("data: "));
+      if (!line) continue;
+      const event = JSON.parse(line.slice(6)) as AskStreamEvent;
+      onEvent(event);
+      if (event.type === "answer") {
+        final = { answer: event.answer ?? "", citations: event.citations ?? [], evidence: event.evidence ?? {} };
+      } else if (event.type === "error") {
+        throw new Error(event.message ?? "The agent could not produce an answer.");
+      }
+    }
+  }
+
+  if (!final) throw new Error("The agent stream ended without an answer.");
+  return final;
 }

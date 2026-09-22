@@ -11,6 +11,7 @@ interface SpanningNode {
   isRoot: boolean;
   direction: "upward" | "downward" | null;
   label: string | null;
+  relationshipType: string | null;
   children: SpanningNode[];
 }
 
@@ -39,6 +40,7 @@ function toSpanningTree(root: TreeNode): SpanningNode {
       isRoot: node.direction === null,
       direction: node.direction,
       label: node.label,
+      relationshipType: node.relationship_type,
       children,
     };
   }
@@ -82,7 +84,11 @@ function Branch({
         <button
           type="button"
           onClick={() => hasChildren && setExpanded((v) => !v)}
-          aria-label={hasChildren ? (expanded ? "Collapse" : "Expand") : undefined}
+          aria-label={
+            hasChildren
+              ? `${expanded ? "Collapse" : "Expand"} ${node.children.length} related ${node.children.length === 1 ? "entity" : "entities"}`
+              : undefined
+          }
           disabled={!hasChildren}
           className="text-ink-subtle hover:bg-line hover:text-ink flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors disabled:pointer-events-none disabled:opacity-0"
         >
@@ -96,7 +102,8 @@ function Branch({
         <button
           type="button"
           onClick={() => onSelect(node.id)}
-          className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left outline-none"
+          aria-current={isSelected ? "true" : undefined}
+          className="focus-visible:ring-accent flex min-w-0 flex-1 items-center gap-2 rounded py-1 text-left outline-none focus-visible:ring-2"
         >
           <span className="flex w-4 shrink-0 justify-center">
             <DirectionIcon direction={node.direction} isRoot={node.isRoot} />
@@ -111,8 +118,16 @@ function Branch({
             {node.name}
           </span>
 
-          {node.label && (
-            <span className="text-ink-subtle hidden shrink-0 text-[11px] sm:inline">{node.label}</span>
+          {(node.label || node.relationshipType) && (
+            <span className="text-ink-subtle hidden shrink-0 text-[11px] sm:inline">
+              {node.label ?? node.relationshipType?.replaceAll("_", " ")}
+            </span>
+          )}
+
+          {hasChildren && !expanded && (
+            <Badge variant="neutral" className="hidden sm:inline-flex">
+              {node.children.length} related
+            </Badge>
           )}
 
           {node.isRoot && (
@@ -161,7 +176,21 @@ export default function EntityTreeView({
   // the details panel share one consistent frame.
   return (
     <div className="scroll-thin h-full w-full overflow-auto p-2">
+      {selectedEntityId && selectedEntityId !== tree.id && (
+        <p className="text-ink-subtle border-line-soft mb-1.5 rounded-md border px-2.5 py-1.5 text-[11px]">
+          Inspecting <span className="text-ink font-medium">{findNodeName(tree, selectedEntityId) ?? "related entity"}</span>
+        </p>
+      )}
       <Branch node={tree} depth={0} selectedEntityId={selectedEntityId} onSelect={onSelect} />
     </div>
   );
+}
+
+function findNodeName(node: SpanningNode, entityId: string): string | null {
+  if (node.id === entityId) return node.name;
+  for (const child of node.children) {
+    const found = findNodeName(child, entityId);
+    if (found) return found;
+  }
+  return null;
 }

@@ -1,279 +1,254 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { AlertCircle, Building2, Network, Waypoints } from "lucide-react";
-import SearchBar from "@/components/SearchBar";
-import ResultsList from "@/components/ResultsList";
-import EntityTreeView from "@/components/EntityTreeView";
-import DetailsPanel from "@/components/DetailsPanel";
-import HowItWorks from "@/components/HowItWorks";
-import WhyItMatters from "@/components/WhyItMatters";
-import ScrollPane from "@/components/ScrollPane";
-import { ResultsSkeleton, TreeSkeleton } from "@/components/Skeletons";
-import { SectionLabel } from "@/components/ui";
+import { useRef, useState, type ReactNode } from "react";
+import { Bot, Building2, Check, ChevronRight, CircleAlert, FileText, Loader2, Search, Waypoints } from "lucide-react";
+import SearchBar, { type ResearchMode } from "@/components/SearchBar";
+import EvidenceList from "@/components/EvidenceLayer";
+import Markdown from "@/components/Markdown";
 import {
-  search,
-  getEntityTree,
+  askQuestionStream,
   getEntityDetail,
-  type SearchResult,
-  type SearchType,
-  type TreeNode,
+  search,
+  type AskResponse,
+  type AskStreamEvent,
   type EntityDetail,
+  type SearchResult,
 } from "@/lib/api";
 
-const TREE_DEPTH = 2;
+const SUGGESTIONS = [
+  { label: "Find an entity", query: "Point72", mode: "search" },
+  { label: "Trace ownership", query: "Who ultimately manages Albacore Partners I Master Fund?", mode: "agent" },
+  { label: "Check status", query: "What is the registration status of Fred Alger Management?", mode: "agent" },
+] as const;
 
-function Wordmark({ size = "default" }: { size?: "default" | "hero" }) {
-  const hero = size === "hero";
+function Logo() {
+  return <span className="query-logo"><Waypoints /></span>;
+}
+
+function SearchResults({ results, onOpen }: { results: SearchResult[]; onOpen: (entityId: string) => void }) {
+  if (!results.length) return <EmptyState icon={<Search />} title="No matching entities" text="Try a legal name, jurisdiction, LEI, or CUSIP." />;
   return (
-    <div className="flex items-center gap-2.5">
-      <span
-        className={`bg-ink flex items-center justify-center rounded-lg text-white ${
-          hero ? "h-9 w-9" : "h-7 w-7"
-        }`}
-      >
-        <Waypoints className={hero ? "h-[18px] w-[18px]" : "h-3.5 w-3.5"} strokeWidth={1.75} />
-      </span>
-      <span
-        className={`text-ink font-semibold tracking-[-0.015em] ${hero ? "text-[19px]" : "text-[14px]"}`}
-      >
-        Institutional Entity Intelligence
-      </span>
+    <div className="candidate-list">
+      {results.map((result) => {
+        const status = result.decision === "AUTO_MATCH" ? "Resolved" : result.decision === "REVIEW" ? "Review" : "Candidate";
+        return (
+          <a key={result.entity_id} href="#entity-profile" onClick={() => onOpen(result.entity_id)} className="candidate-row">
+            <span className="candidate-icon"><Building2 /></span>
+            <div className="candidate-main">
+              <h3>{result.canonical_name}</h3>
+              <p>{result.jurisdiction ?? result.legal_country ?? "Jurisdiction unavailable"}</p>
+              <span className="candidate-id">{result.entity_id}</span>
+            </div>
+            <span className={`candidate-status ${status.toLowerCase()}`}>{status}</span>
+            <ChevronRight className="candidate-arrow" />
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
+function EntityProfile({ detail, loading }: { detail: EntityDetail | null; loading: boolean }) {
+  if (!detail && !loading) return null;
+  if (loading) return <div id="entity-profile" className="entity-profile-loading"><Loader2 className="animate-spin" /> Opening entity profile…</div>;
+  if (!detail) return null;
+  return (
+    <section id="entity-profile" className="entity-profile">
+      <div className="entity-profile-heading"><span>Entity profile</span><a href={`https://search.gleif.org/#/search/lei/${detail.entity_id}`} target="_blank" rel="noreferrer">View in GLEIF ↗</a></div>
+      <h2>{detail.canonical_name}</h2>
+      <div className="entity-profile-grid">
+        <div><small>LEI</small><code>{detail.entity_id}</code></div>
+        <div><small>Status</small><p>{detail.entity_status ?? "—"}</p></div>
+        <div><small>Jurisdiction</small><p>{detail.jurisdiction ?? detail.legal_country ?? "—"}</p></div>
+        <div><small>Registration</small><p>{detail.lineage?.registration_status ?? "—"}</p></div>
+      </div>
+    </section>
+  );
+}
+
+function EmptyState({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
+  return <div className="empty-state"><span>{icon}</span><div><strong>{title}</strong><p>{text}</p></div></div>;
+}
+
+/* The live research feed: a running list of what the agent is doing, streamed
+   from /api/ask/stream. Shown only while the answer is in flight and dropped
+   the moment the answer arrives, per the "hide them once finished" request. */
+function ResearchFeed({ events }: { events: AskStreamEvent[] }) {
+  const last = events[events.length - 1];
+  const inFlight = last && (last.type === "status" || last.type === "tool_call");
+  return (
+    <div className="research-feed" aria-live="polite" aria-busy="true">
+      {events.map((event, index) => {
+        const running = index === events.length - 1 && inFlight;
+        return (
+          <div key={index} className={`research-event ${event.type}`}>
+            <span className="research-event-icon">
+              {running ? <Loader2 className="animate-spin" /> : event.type === "tool_result" ? <Check /> : <span className="research-dot" />}
+            </span>
+            <div className="research-event-main">
+              <p>{event.message ?? event.type}</p>
+              {event.type === "tool_result" && (
+                <small>
+                  {event.count ?? 0} record{(event.count ?? 0) === 1 ? "" : "s"}
+                  {event.source ? ` · ${event.source}` : ""}
+                </small>
+              )}
+              {event.type === "tool_call" && event.tool && <small>via {event.tool}</small>}
+            </div>
+          </div>
+        );
+      })}
+      {!inFlight && (
+        <div className="research-event status">
+          <span className="research-event-icon"><Loader2 className="animate-spin" /></span>
+          <div className="research-event-main"><p>Researching…</p></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SourceSkeleton() {
+  return (
+    <div className="source-skeleton" aria-hidden>
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="source-skeleton-card">
+          <span /><span /><span />
+        </div>
+      ))}
     </div>
   );
 }
 
 export default function Home() {
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [results, setResults] = useState<SearchResult[] | null>(null);
-  // Distinct from `results !== null`: flips true the moment a search fires and
-  // never resets, so the page commits to the workspace layout even while the
-  // first search is still in flight rather than snapping back to the landing.
-  const [hasSearched, setHasSearched] = useState(false);
-
-  const [rootEntityId, setRootEntityId] = useState<string | null>(null);
-  const [treeData, setTreeData] = useState<TreeNode | null>(null);
-  const [treeLoading, setTreeLoading] = useState(false);
-  const [treeError, setTreeError] = useState<string | null>(null);
-
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [mode, setMode] = useState<ResearchMode>("search");
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [agentResult, setAgentResult] = useState<AskResponse | null>(null);
+  const [events, setEvents] = useState<AskStreamEvent[]>([]);
+  const [focusedEvidenceId, setFocusedEvidenceId] = useState<string | null>(null);
   const [detail, setDetail] = useState<EntityDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const hasOutput = Boolean(error) || searchResults !== null || agentResult !== null;
+  const agentActive = mode === "agent" && (hasOutput || loading);
 
-  const loadEntity = useCallback(async (entityId: string) => {
-    setSelectedEntityId(entityId);
+  function changeMode(nextMode: ResearchMode) {
+    setMode(nextMode);
+    setError(null);
+    setSearchResults(null);
+    setAgentResult(null);
+    setEvents([]);
+    setFocusedEvidenceId(null);
+    setDetail(null);
+  }
+
+  async function runQuery(value: string, activeMode = mode) {
+    setQuery(value);
+    setLoading(true);
+    setError(null);
+    setSearchResults(null);
+    setAgentResult(null);
+    setEvents([]);
+    setFocusedEvidenceId(null);
+    setDetail(null);
+    try {
+      if (activeMode === "agent") {
+        const result = await askQuestionStream(value, null, (event) => {
+          if (event.type === "status" || event.type === "tool_call" || event.type === "tool_result") {
+            setEvents((previous) => [...previous, event]);
+          }
+        });
+        setAgentResult(result);
+      } else {
+        setSearchResults((await search(value, "name")).results);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "We couldn’t complete that request.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function runSuggestion(suggestion: (typeof SUGGESTIONS)[number]) {
+    changeMode(suggestion.mode);
+    void runQuery(suggestion.query, suggestion.mode);
+  }
+
+  async function openEntity(entityId: string) {
     setDetailLoading(true);
-    setDetailError(null);
     try {
       setDetail(await getEntityDetail(entityId));
-    } catch (e) {
-      setDetailError(e instanceof Error ? e.message : "Failed to load entity");
-      setDetail(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "We couldn’t open that entity profile.");
     } finally {
       setDetailLoading(false);
     }
-  }, []);
-
-  const loadTree = useCallback(
-    async (entityId: string) => {
-      setRootEntityId(entityId);
-      setTreeLoading(true);
-      setTreeError(null);
-      try {
-        setTreeData(await getEntityTree(entityId, TREE_DEPTH));
-      } catch (e) {
-        setTreeError(e instanceof Error ? e.message : "Failed to load relationship tree");
-        setTreeData(null);
-      } finally {
-        setTreeLoading(false);
-      }
-      await loadEntity(entityId);
-    },
-    [loadEntity],
-  );
-
-  async function handleSearch(query: string, searchType: SearchType) {
-    setHasSearched(true);
-    setSearching(true);
-    setSearchError(null);
-    setResults(null);
-    try {
-      const resp = await search(query, searchType);
-      setResults(resp.results);
-      setSearching(false);
-      // A single unambiguous result (or a confident AUTO_MATCH) goes straight
-      // to the tree - fired after `searching` clears so the results skeleton
-      // and the tree skeleton never show at the same time.
-      const autoMatch = resp.results.find((r) => r.decision === "AUTO_MATCH");
-      if (resp.results.length === 1) void loadTree(resp.results[0].entity_id);
-      else if (autoMatch) void loadTree(autoMatch.entity_id);
-    } catch (e) {
-      setSearchError(e instanceof Error ? e.message : "Search failed");
-      setSearching(false);
-    }
   }
 
-  const showResultsPicker = results !== null && results.length > 1;
-  // Until an entity is picked there is nothing to put in the tree or details
-  // panes, so the results take the whole stage rather than sitting in a thin
-  // strip above two empty cards.
-  const workspaceActive = Boolean(rootEntityId || treeLoading);
-
-  if (!hasSearched) {
-    return (
-      <div className="scroll-thin bg-surface flex min-h-screen flex-col overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center gap-12 px-6 py-20">
-          <div className="flex w-full flex-col items-center gap-7">
-            <div className="animate-fade-in-up flex flex-col items-center gap-3 text-center">
-              <Wordmark size="hero" />
-              <p className="text-ink-muted max-w-md text-[13.5px] leading-relaxed">
-                Resolve a fund or manager to its legal entity, then explore its ownership structure and SEC filing
-                activity.
-              </p>
-            </div>
-
-            <div className="animate-fade-in-up w-full" style={{ animationDelay: "100ms" }}>
-              <SearchBar onSearch={handleSearch} loading={searching} size="hero" />
-              {searchError && (
-                <p className="mt-3 flex items-center justify-center gap-1.5 text-[12.5px] text-rose-600">
-                  <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
-                  {searchError}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="animate-fade-in-up w-full" style={{ animationDelay: "200ms" }}>
-            <HowItWorks />
-          </div>
-        </div>
-
-        {/* "How it works" answers what the product does; this answers why any
-            of it is worth doing. Landing page only - once you're working, the
-            data itself makes the argument. */}
-        <WhyItMatters />
-      </div>
-    );
+  function focusEvidence(evidenceId: string) {
+    setFocusedEvidenceId(evidenceId);
+    const target = railRef.current?.querySelector<HTMLElement>(`#evidence-${CSS.escape(evidenceId)}`);
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   return (
-    <div className="bg-canvas flex h-screen w-screen flex-col overflow-hidden">
-      {/* Three equal-weight columns so the search bar is optically centred in
-          the viewport regardless of how wide the wordmark renders. */}
-      <header className="border-line bg-surface z-10 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-6 border-b px-5 py-3">
-        <button
-          type="button"
-          onClick={() => setHasSearched(false)}
-          className="justify-self-start outline-none transition-opacity hover:opacity-70"
-          aria-label="Back to start"
-        >
-          <Wordmark />
-        </button>
-        <div className="w-[min(44rem,64vw)]">
-          <SearchBar onSearch={handleSearch} loading={searching} />
-        </div>
-        <div aria-hidden />
+    <main className={`query-app ${hasOutput || loading ? "has-output" : ""} ${agentActive ? "mode-agent" : ""}`}>
+      <header className="query-header">
+        <a href="#top" className="query-brand" aria-label="Entity Intelligence home"><Logo /><span>Entity intelligence</span></a>
+        <span className="query-header-status"><i /> Research ready</span>
       </header>
 
-      {searchError && (
-        <div className="flex shrink-0 items-center gap-1.5 border-b border-rose-100 bg-rose-50 px-5 py-2 text-[12.5px] text-rose-700">
-          <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
-          {searchError}
+      <section id="top" className={`query-page ${agentActive ? "has-agent" : ""}`}>
+        <div className="query-intro">
+          <p>Institutional entity intelligence</p>
+          <h1>What do you want to know?</h1>
+          <span>Resolve legal entities, inspect relationships, and trace the evidence behind the answer.</span>
         </div>
-      )}
 
-      {!workspaceActive && (searching || results !== null) && (
-        <main className="scroll-thin bg-surface min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-6">
-          <div className="mb-2.5">
-            <SectionLabel>{searching ? "Searching" : `${results?.length ?? 0} results`}</SectionLabel>
-          </div>
-          {searching ? <ResultsSkeleton /> : results && <ResultsList results={results} onSelect={loadTree} />}
-        </main>
-      )}
+        <div className="query-column">
+          <div className="query-composer"><SearchBar mode={mode} query={query} loading={loading} onModeChange={changeMode} onQueryChange={setQuery} onSubmit={runQuery} /></div>
 
-      {workspaceActive && (searching || showResultsPicker) && (
-        // Once the workspace is live the picker collapses to a strip. The
-        // height cap is load-bearing, not cosmetic: an uncapped list (a brand
-        // name can return 10+ legal entities) grows until it squeezes the
-        // workspace below it to zero height, making the tree and details
-        // invisible even though they rendered.
-        <ScrollPane
-          className="border-line bg-surface shrink-0 border-b"
-          contentClassName="max-h-[13.5rem] px-5 pt-3.5 pb-5"
-        >
-          <div>
-            <div className="mb-2.5">
-              <SectionLabel>{searching ? "Searching" : `${results?.length ?? 0} results`}</SectionLabel>
-            </div>
-            {searching ? <ResultsSkeleton /> : results && <ResultsList results={results} onSelect={loadTree} />}
-          </div>
-        </ScrollPane>
-      )}
+          {!hasOutput && !loading && <div className="query-suggestions">
+            {SUGGESTIONS.map((suggestion) => <button key={suggestion.label} type="button" onClick={() => runSuggestion(suggestion)}>
+              <span>{suggestion.mode === "agent" ? <Bot /> : <Search />}</span><div><small>{suggestion.label}</small><p>{suggestion.query}</p></div>
+            </button>)}
+          </div>}
 
-      {/* Both panes are cards with an identical 44px titled header bar, so
-          their frames, headers and content areas start on the same baseline. */}
-      <main className={`min-h-0 flex-1 gap-4 p-4 ${workspaceActive ? "flex" : "hidden"}`}>
-        <section className="border-line bg-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl shadow-[0_1px_2px_rgba(15,23,42,0.04)] ring-1 ring-transparent">
-          <div className="border-line-soft flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4">
-            <SectionLabel icon={<Network className="h-3 w-3" strokeWidth={2} />}>
-              Relationship tree · depth {TREE_DEPTH}
-            </SectionLabel>
-            {rootEntityId && !treeLoading && (
-              <div className="text-ink-subtle flex items-center gap-3.5 text-[11px]">
-                <span className="flex items-center gap-1.5">
-                  <span className="bg-upward h-1.5 w-1.5 rounded-full" />
-                  Parent
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="bg-downward h-1.5 w-1.5 rounded-full" />
-                  Subsidiary / fund
-                </span>
+          {(hasOutput || loading) && <section className="query-output" aria-live="polite">
+            {!loading && error && <div className="query-error"><CircleAlert /><div><strong>Request unavailable</strong><p>{error}</p></div></div>}
+            {!loading && !error && mode === "search" && searchResults && <><p className="output-label">{searchResults.length} entity {searchResults.length === 1 ? "match" : "matches"}</p><SearchResults results={searchResults} onOpen={(entityId) => void openEntity(entityId)} /><EntityProfile detail={detail} loading={detailLoading} /></>}
+
+            {mode === "agent" && !error && (loading || agentResult) && <div className="conversation">
+              <div className="conversation-main">
+                <div className="question-turn"><span>You</span><p>{query}</p></div>
+                {loading && <ResearchFeed events={events} />}
+                {!loading && agentResult && <div className="answer-turn">
+                  <div className="answer-avatar"><Logo /></div>
+                  <div className="answer-body">
+                    <span className="answer-label">Entity Intelligence <i>MCP</i></span>
+                    <Markdown content={agentResult.answer} citations={agentResult.citations} evidence={agentResult.evidence} onCitationClick={focusEvidence} />
+                  </div>
+                </div>}
               </div>
-            )}
-          </div>
 
-          {treeError && (
-            <p className="flex shrink-0 items-center gap-1.5 border-b border-rose-100 bg-rose-50 px-4 py-2 text-[12.5px] text-rose-700">
-              <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
-              {treeError}
-            </p>
-          )}
-
-          <div className="min-h-0 flex-1">
-            {treeLoading ? (
-              <TreeSkeleton />
-            ) : treeData && rootEntityId ? (
-              <EntityTreeView
-                key={rootEntityId}
-                data={treeData}
-                selectedEntityId={selectedEntityId}
-                onSelect={loadEntity}
-              />
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-2.5">
-                <span className="bg-canvas text-ink-subtle flex h-10 w-10 items-center justify-center rounded-xl">
-                  <Network className="h-5 w-5" strokeWidth={1.5} />
-                </span>
-                <p className="text-ink-subtle text-[12.5px]">Select a result to load its relationship tree.</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className="border-line bg-surface flex w-[clamp(25rem,30vw,34rem)] shrink-0 flex-col overflow-hidden rounded-xl shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="border-line-soft flex h-11 shrink-0 items-center border-b px-4">
-            <SectionLabel icon={<Building2 className="h-3 w-3" strokeWidth={2} />}>Entity</SectionLabel>
-          </div>
-          <div className="min-h-0 flex-1">
-            {/* treeLoading counts as loading here: loadTree fetches the tree
-                and then immediately loads the root entity, so without this the
-                panel flashes "select an entity" for the whole tree fetch. */}
-            <DetailsPanel detail={detail} loading={detailLoading || treeLoading} error={detailError} />
-          </div>
-        </aside>
-      </main>
-    </div>
+              <aside className="source-rail" ref={railRef} aria-label="Sources and method">
+                <div className="source-heading"><FileText /> Sources &amp; method {agentResult && <span>{Object.keys(agentResult.evidence).length}</span>}</div>
+                {agentResult
+                  ? <EvidenceList
+                      evidence={agentResult.evidence}
+                      focusedEvidenceId={focusedEvidenceId}
+                      compact
+                      contexts={[{ answer: agentResult.answer, citations: agentResult.citations }]}
+                    />
+                  : <SourceSkeleton />}
+              </aside>
+            </div>}
+          </section>}
+        </div>
+      </section>
+    </main>
   );
 }

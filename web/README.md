@@ -27,6 +27,10 @@ a separate pipeline.
    centered search bar and a short "How it works" step flow, nothing else,
    until you actually search. Type a query and pick what it is: **Name**,
    **LEI**, or **Security ID (CUSIP)**.
+   The four steps below the search bar auto-play a miniature preview of each
+   stage (2.8s per step) and are explicitly labelled as auto-playing; the
+   steps themselves are not clickable, since there is nothing to switch to -
+   the preview is a demonstration, not a tab set.
 2. A single unambiguous result (or a confident `AUTO_MATCH`) jumps straight to
    the relationship tree. Otherwise the results take the whole screen as an
    aligned table - name, jurisdiction, LEI, decision - so ten near-identical
@@ -53,12 +57,52 @@ a separate pipeline.
    provenance), and, when the entity resolves as a filer, its latest SEC 13F
    reported holdings. Every loading state shows a skeleton that mirrors the
    real layout's geometry rather than a blank screen or a spinner.
+6. The details panel header carries an **Ask** button that opens a chat
+   sidebar (`AskDrawer.tsx`) scoped to the selected entity, answered via
+   `src/er/agent` (a real MCP server the agent is wired to over the MCP
+   protocol, backed by an OpenRouter model) - a running conversation, not a
+   one-shot inline box. Each assistant reply carries inline `[1]` `[2]`
+   citation markers; clicking one switches the same drawer into its
+   **Sources & method** sub-view (a back arrow returns to the chat) showing the
+   exact record each claim is based on - source, evidence type, filter criteria,
+   record count, as-of date, and expandable record/field provenance. A collapsed
+   high-level lineage groups related evidence receipts by the deterministic
+   query that produced them; it is deliberately not a raw agent trace. There is no document corpus
+   behind this (the underlying lookups are OpenSearch/DuckDB, not RAG), so
+   each citation is a deterministic provenance record a tool call constructed
+   from the exact query it ran, never an LLM-asserted confidence score.
+   Requires `OPENROUTER_API_KEY` in the repo root's `.env` - without it, the
+   drawer still opens but shows a clear "agent is unavailable" error rather
+   than failing silently. Switching to a different entity while the drawer is
+   open starts a fresh conversation, since old citations would otherwise
+   point at evidence about an entity no longer in view.
+
+The landing page's composer also offers an **Agent** mode alongside Search.
+Agent answers stream from `POST /api/ask/stream` (SSE): while the model works,
+the UI shows a live **research feed** - one line per step, e.g. "Searching name
+for …", "Reading the full profile for …" - and drops it the moment the answer
+arrives. Answers are rendered as real Markdown (headings, bold, lists, GFM
+tables) rather than raw text, inline `[n]` markers stay clickable, and the
+**Sources & method** evidence rail sits top-right in its own column (pinned to the top
+of the conversation, like Perplexity's source panel) instead of below the
+answer; on narrow screens it stacks underneath. The non-streaming
+`POST /api/ask` endpoint is still used by the details-panel Ask drawer.
 
 The landing page also carries a floating **Why this matters** button, which
-opens a drawer explaining what entity resolution, identifiers, hierarchy,
-lineage and provenance each buy you when an agent is consuming this data -
-with the measured before/after numbers from `experiments/` rather than
-assertions.
+opens a focus-trapped drawer explaining what entity resolution, identifiers,
+hierarchy, lineage and provenance each buy you when an agent is consuming
+this data - with the measured before/after numbers from `experiments/` rather
+than assertions. The five topics and the title's accent rule animate in as a
+short staged sequence on open, restrained enough not to delay reading, and
+fall back to a static state under `prefers-reduced-motion`. Each topic also
+carries its own small illustration in the same visual grammar as the
+how-it-works preview - e.g. Entity resolution shows one brand name fanning
+into three jurisdictions, Identifiers contrasts an ambiguous name match
+against an exact LEI match - so the argument is shown, not just stated.
+Both preview systems are deliberately flat: hairline borders, no gradients
+or glow, one accent color used sparingly for the single relevant state
+rather than red/green traffic-light blocks - closer to how a real product
+screenshot reads than a decorative illustration card.
 
 ## Structure
 
@@ -67,8 +111,8 @@ src/
 ├── app/
 │   ├── layout.tsx             # loads Inter + JetBrains Mono as CSS variables
 │   ├── globals.css            # Tailwind v4 @theme tokens, .tabular, .scroll-thin
-│   └── page.tsx               # the only route - landing search page, then
-│                                full-screen results, then tree + details
+│   └── page.tsx               # the only route - query composer (Search/Agent),
+│                                streaming agent answer, results, entity profile
 ├── components/
 │   ├── ui.tsx                 # shared primitives: SectionLabel, Badge, Mono,
 │   │                            Field/FieldGrid - the single source of truth
@@ -84,7 +128,15 @@ src/
 │   ├── LineageTimeline.tsx    # four-point GLEIF identity timeline
 │   ├── ScrollPane.tsx         # height-capped scroller + "more below" control
 │   ├── Skeletons.tsx          # loading placeholders that mirror real geometry
-│   └── DetailsPanel.tsx       # renders EntityDetail JSON
+│   ├── DetailsPanel.tsx       # renders EntityDetail JSON; header "Ask" button
+│   │                            opens AskDrawer
+│   ├── AskDrawer.tsx          # chat sidebar for the selected entity - answers
+│   │                            with inline [n] citations; a marker click
+│   │                            switches the same drawer to its evidence view
+│   └── EvidenceLayer.tsx      # evidence card list, shown in AskDrawer's
+│                                evidence view and page.tsx's right-hand rail
+│   └── Markdown.tsx           # renders agent answers as Markdown (GFM) and
+│                                turns inline [n] markers into citation links
 └── lib/api.ts                 # typed fetch client - mirrors src/er/api/schemas.py exactly
 ```
 

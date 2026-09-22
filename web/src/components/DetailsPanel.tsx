@@ -8,10 +8,12 @@ import {
   Fingerprint,
   History,
   Info,
+  MessageCircleQuestion,
   MousePointerClick,
   TrendingUp,
 } from "lucide-react";
 import type { EntityDetail, EntityIdentifier } from "@/lib/api";
+import AskDrawer from "@/components/AskDrawer";
 import { Bar } from "@/components/Skeletons";
 import LineageTimeline from "@/components/LineageTimeline";
 import { Badge, Field, FieldGrid, Mono, SectionLabel, type BadgeVariant } from "@/components/ui";
@@ -196,6 +198,8 @@ export default function DetailsPanel({
   loading: boolean;
   error: string | null;
 }) {
+  const [askOpen, setAskOpen] = useState(false);
+
   if (loading) return <DetailsSkeleton />;
 
   if (error) {
@@ -222,8 +226,8 @@ export default function DetailsPanel({
 
   return (
     <div className="scroll-thin h-full overflow-y-auto">
-      <header className="px-5 pt-4 pb-4">
-        <div className="flex items-start gap-2.5">
+      <header className="flex items-start justify-between gap-2 px-5 pt-4 pb-4">
+        <div className="flex min-w-0 items-start gap-2.5">
           <span className="bg-accent-soft text-accent mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
             <Building2 className="h-4 w-4" strokeWidth={1.75} />
           </span>
@@ -232,6 +236,14 @@ export default function DetailsPanel({
             <Mono className="text-ink-subtle mt-0.5 block">{detail.entity_id}</Mono>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => setAskOpen(true)}
+          className="border-line text-ink-muted hover:border-accent/40 hover:text-ink focus-visible:ring-accent-soft flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-medium transition-colors focus-visible:ring-4 focus-visible:outline-none"
+        >
+          <MessageCircleQuestion className="h-3.5 w-3.5" strokeWidth={1.75} />
+          Ask
+        </button>
       </header>
 
       <Section title="Overview" icon={<Info className="h-3 w-3" strokeWidth={2} />}>
@@ -342,6 +354,17 @@ export default function DetailsPanel({
           </>
         )}
       </Section>
+
+      <AskDrawer
+        // Remounts (resetting the conversation) whenever the selected entity
+        // changes - old citations would otherwise point at evidence about an
+        // entity no longer in view.
+        key={detail.entity_id}
+        entityId={detail.entity_id}
+        entityName={detail.canonical_name}
+        open={askOpen}
+        onClose={() => setAskOpen(false)}
+      />
     </div>
   );
 }
