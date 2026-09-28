@@ -46,7 +46,46 @@ class Citation(BaseModel):
     evidence_id: str
 
 
+class VerificationCheck(BaseModel):
+    """One typed question Jev answered about the finished answer. `probability`
+    is Jev's calibrated probability that the check holds (1.0 = holds); it is
+    None when the model did not return that key at all, which is "no signal"
+    and must not be read as a failure - so `passed` is None too, never False.
+    """
+
+    key: str
+    label: str
+    probability: float | None = None
+    threshold: float
+    passed: bool | None = None
+
+
+class Verification(BaseModel):
+    """The verification badge attached to an AskResult - see er.agent.verifier.
+
+    "unavailable" means the check did not run (verifier disabled, model
+    unreachable, unparseable response) and is deliberately distinct from
+    "unverified", which means it ran and the answer did not hold up. A consumer
+    must not render the two the same way.
+    """
+
+    status: Literal["verified", "partial", "unverified", "unavailable"]
+    headline: str
+    detail: str
+    model: str | None = None
+    checks: list[VerificationCheck] = []
+    verdict: str | None = None
+    verdict_confidence: float | None = None
+    latency_ms: int | None = None
+    # How many Decisions calls it took (er.agent.verifier retries transient
+    # failures). Developer-trace detail; not part of the API's badge shape.
+    attempts: int | None = None
+    usage: dict[str, Any] | None = None
+    reason: str | None = None
+
+
 class AskResult(BaseModel):
     answer: str
     citations: list[Citation] = []
     evidence: dict[str, Evidence] = {}
+    verification: Verification | None = None

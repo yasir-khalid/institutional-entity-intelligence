@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from mcp import Client
 
+from er.agent.models import AskResult as AgentAskResult
 from er.agent.orchestrator import ask as agent_ask
 from er.agent.orchestrator import mcp_stdio_params
 from er.api.schemas import (
@@ -38,6 +39,7 @@ from er.api.schemas import (
     SearchResponse,
     SearchResult,
     TreeNode,
+    VerificationOut,
 )
 from er.config import AppConfig, load_config
 from er.entity.profile import get_entity_profile
@@ -232,6 +234,15 @@ def entity_detail(entity_id: str) -> EntityDetail:
     )
 
 
+def _verification_out(result: AgentAskResult) -> VerificationOut | None:
+    """Project er.agent.verifier's badge for the wire. `usage` (token counts and
+    cost) is deliberately dropped here - it is operator telemetry, not something
+    the UI should show next to an answer."""
+    if result.verification is None:
+        return None
+    return VerificationOut(**result.verification.model_dump(exclude={"usage"}))
+
+
 @app.post("/api/ask", response_model=AskResponse)
 async def ask_question(body: AskRequest) -> AskResponse:
     """Answer a question about an entity via er.agent.orchestrator, which
@@ -249,6 +260,7 @@ async def ask_question(body: AskRequest) -> AskResponse:
         answer=result.answer,
         citations=[CitationOut(marker=c.marker, evidence_id=c.evidence_id) for c in result.citations],
         evidence={k: EvidenceOut(**v.model_dump()) for k, v in result.evidence.items()},
+        verification=_verification_out(result),
     )
 
 
@@ -258,7 +270,9 @@ async def ask_question_stream(body: AskRequest) -> StreamingResponse:
     show what the agent is doing (which tool it called, what came back) while it
     runs instead of a blank spinner. Each SSE `data:` line is one JSON event;
     the final event has type "answer" and carries the same shape as
-    /api/ask's response, or type "error" if the run failed."""
+    /api/ask's response, or type "error" if the run failed. With `trace: true`
+    in the body, "trace" events carrying developer spans are interleaved too
+    (see er.agent.trace)."""
     client = app.state.mcp_client
     if client is None:
         raise HTTPException(503, "The entity-intelligence agent is unavailable (its MCP server failed to start).")
@@ -270,13 +284,17 @@ async def ask_question_stream(body: AskRequest) -> StreamingResponse:
 
     async def run() -> None:
         try:
-            result = await agent_ask(client, _cfg(), body.question, body.entity_id, on_event=on_event)
+            result = await agent_ask(
+                client, _cfg(), body.question, body.entity_id, on_event=on_event, trace=body.trace
+            )
+            verification = _verification_out(result)
             await queue.put(
                 {
                     "type": "answer",
                     "answer": result.answer,
                     "citations": [c.model_dump() for c in result.citations],
                     "evidence": {k: v.model_dump() for k, v in result.evidence.items()},
+                    "verification": verification.model_dump() if verification else None,
                 }
             )
         except Exception as exc:  # noqa: BLE001 - surfaced to the client as an error event

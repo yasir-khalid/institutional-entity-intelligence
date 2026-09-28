@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, FileSearch, Loader2, MessageCircleQuestion, Send, X } from "lucide-react";
-import { askQuestion, type AskResponse, type Citation, type Evidence } from "@/lib/api";
+import { askQuestion, type AskResponse, type Citation, type Evidence, type Verification } from "@/lib/api";
 import EvidenceList from "@/components/EvidenceLayer";
 import CitationChip from "@/components/CitationChip";
+import VerificationBadge from "@/components/VerificationBadge";
 
 /* ---------------------------------------------------------------------------
    The "Ask" chat sidebar - a focus-trapped drawer (same pattern as
@@ -19,6 +20,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   citations?: Citation[];
+  verification?: Verification | null;
 }
 
 function AnswerText({
@@ -118,7 +120,10 @@ export default function AskDrawer({
     try {
       const res: AskResponse = await askQuestion(trimmed, entityId);
       setEvidenceStore((prev) => ({ ...prev, ...res.evidence }));
-      setMessages((m) => [...m, { role: "assistant", content: res.answer, citations: res.citations }]);
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: res.answer, citations: res.citations, verification: res.verification },
+      ]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -207,6 +212,7 @@ export default function AskDrawer({
                   <div key={i} className="flex justify-start">
                     <div className="bg-canvas border-line-soft text-ink max-w-[90%] rounded-lg rounded-bl-sm border px-3 py-2 text-[12.5px] leading-relaxed">
                       <AnswerText content={m.content} citations={m.citations ?? []} evidence={evidenceStore} onCiteClick={openEvidence} />
+                      <VerificationBadge verification={m.verification} />
                       {(m.citations?.length ?? 0) > 0 && (
                         <button
                           type="button"

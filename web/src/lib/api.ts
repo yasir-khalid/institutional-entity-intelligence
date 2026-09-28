@@ -105,16 +105,61 @@ export interface Citation {
   evidence_id: string;
 }
 
+/* The answer's verification badge, mirrored from er.api.schemas.VerificationOut
+   (produced by er.agent.verifier). `status` "unavailable" means the check did
+   not run - a different state from "unverified", which means it ran and the
+   answer did not hold up. `probability` is null when the verifier returned no
+   reading for that check: no signal, never a failure. */
+export interface VerificationCheck {
+  key: string;
+  label: string;
+  probability: number | null;
+  threshold: number;
+  passed: boolean | null;
+}
+
+export interface Verification {
+  status: "verified" | "partial" | "unverified" | "unavailable";
+  headline: string;
+  detail: string;
+  model: string | null;
+  checks: VerificationCheck[];
+  verdict: string | null;
+  verdict_confidence: number | null;
+  latency_ms: number | null;
+  reason: string | null;
+}
+
 export interface AskResponse {
   answer: string;
   citations: Citation[];
   evidence: Record<string, Evidence>;
+  verification: Verification | null;
+}
+
+/* One step of an agent run, mirrored from er.agent.trace.TraceSpan - a model
+   turn, an MCP tool call, the submit_answer gate, or the verifier. Only
+   streamed when the request asks for `trace`. `start_ms` is relative to the
+   start of the run so spans lay out as a waterfall directly. `detail` differs
+   by kind; DeveloperPanel reads it field by field. */
+export interface TraceSpan {
+  id: string;
+  /** The model turn that requested this call; null for turns and the verifier,
+   * which sit directly under the run. Makes the trace a tree. */
+  parent_id: string | null;
+  kind: "llm" | "tool" | "submit" | "verifier";
+  name: string;
+  start_ms: number;
+  duration_ms: number;
+  status: "ok" | "error" | "rejected";
+  summary: string;
+  detail: Record<string, unknown>;
 }
 
 /** One progress event emitted while the agent researches, mirrored from
  * er.agent.orchestrator.ProgressEvent (see er/api/app.py's /api/ask/stream). */
 export interface AskStreamEvent {
-  type: "status" | "tool_call" | "tool_result" | "answer" | "error";
+  type: "status" | "tool_call" | "tool_result" | "verification" | "trace" | "answer" | "error";
   message?: string;
   tool?: string;
   source?: string | null;
@@ -123,6 +168,10 @@ export interface AskStreamEvent {
   answer?: string;
   citations?: Citation[];
   evidence?: Record<string, Evidence>;
+  status?: string;
+  detail?: string;
+  verification?: Verification | null;
+  span?: TraceSpan;
 }
 
 async function getJson<T>(path: string): Promise<T> {
@@ -168,11 +217,12 @@ export async function askQuestionStream(
   question: string,
   entityId: string | null,
   onEvent: (event: AskStreamEvent) => void,
+  options: { trace?: boolean } = {},
 ): Promise<AskResponse> {
   const res = await fetch(`${API_URL}/api/ask/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, entity_id: entityId }),
+    body: JSON.stringify({ question, entity_id: entityId, trace: options.trace ?? false }),
   });
   if (!res.ok || !res.body) {
     const body = await res.text();
@@ -196,7 +246,12 @@ export async function askQuestionStream(
       const event = JSON.parse(line.slice(6)) as AskStreamEvent;
       onEvent(event);
       if (event.type === "answer") {
-        final = { answer: event.answer ?? "", citations: event.citations ?? [], evidence: event.evidence ?? {} };
+        final = {
+          answer: event.answer ?? "",
+          citations: event.citations ?? [],
+          evidence: event.evidence ?? {},
+          verification: event.verification ?? null,
+        };
       } else if (event.type === "error") {
         throw new Error(event.message ?? "The agent could not produce an answer.");
       }

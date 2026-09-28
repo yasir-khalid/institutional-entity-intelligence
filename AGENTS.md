@@ -76,6 +76,14 @@ src/er/
 │                             direct Python import) until it calls a final
 │                             submit_answer tool with citations restricted to
 │                             evidence_ids the conversation actually produced.
+│                             verifier.py checks the finished answer
+│                             against those tool results with Jev (a decision
+│                             model, OpenRouter's Decisions API). trace.py
+│                             builds the opt-in developer trace (one span per
+│                             model turn / tool call / submit gate / verifier)
+│                             streamed to the web Developer view. payloads.py
+│                             is the shared shape-preserving size limit both
+│                             use.
 │                             CLI: er.cli.mcp_server (runs the server),
 │                             er.cli.ask (terminal Q&A harness).
 ├── benchmark/                  # auto-generates evaluation_pairs.parquet from

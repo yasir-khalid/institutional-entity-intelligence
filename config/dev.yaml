@@ -40,6 +40,43 @@ agent:
   openrouter_base_url: https://openrouter.ai/api/v1
   mcp_server_command: ["uv", "run", "python", "-m", "er.cli.mcp_server"]
   max_tool_turns: 6
+  # Retry a model call that failed transiently (dropped connection, 429/502/
+  # 503/504) - never a 400, which fails identically every time.
+  openrouter_retries: 2
+  openrouter_retry_backoff_seconds: 0.75
+  openrouter_connect_timeout_seconds: 10
+  # Per tool result, as sent to the model. A large issuer's full profile can be
+  # ~7.6M chars (30k+ ISIN identifiers inlined), which the API rejects; over this,
+  # long lists are trimmed with elisions marked and the model is told.
+  max_tool_result_chars: 40000
+  # Post-answer verification (er.agent.verifier). Jev is a decision model, not
+  # a chat model: it answers this fixed set of typed questions about the
+  # finished answer in one pass and returns calibrated probabilities. The
+  # thresholds below are the whole verified/partial/unverified rule - retune
+  # the badge here, not in code.
+  verifier:
+    enabled: true
+    model: typesafe/jev-1.13
+    decisions_url: https://openrouter.ai/api/alpha/decisions
+    timeout_seconds: 30
+    # Retry a Jev call that failed transiently (couldn't connect, dropped,
+    # 429/502/503/504); give up on connecting after a few seconds.
+    connect_timeout_seconds: 5
+    retries: 2
+    retry_backoff_seconds: 0.5
+    # Jev's input limit is 32,768 tokens; this JSON runs ~2 chars/token.
+    max_state_chars: 50000
+    # Calibrated against a labelled answer set, not picked by feel - see
+    # experiments/006-jev-answer-verification.md. A faithful answer reads
+    # ~0.8 on `grounded`, so a higher-looking bar here would mark almost
+    # every correct answer "partially verified".
+    grounded_min: 0.70
+    not_contradicted_min: 0.87
+    citations_supported_min: 0.70
+    scope_respected_min: 0.75
+    # The one veto: below this the answer conflicts with the records and is
+    # reported unverified whatever else it scored.
+    not_contradicted_floor: 0.50
 
 # Deterministic matcher tuning - change these to retune scoring without touching code.
 matching:

@@ -5,14 +5,19 @@ Desktop or any other tool would use to talk to er.agent.mcp_server.
 
 This module owns no entity-resolution logic and no Evidence-construction
 logic - it only turns the server's tools into OpenAI-style function schemas,
-drives the model through calling them, and enforces that the model's final
-answer cites only evidence_ids that a tool call actually returned earlier in
-the same conversation (never an invented one).
+drives the model through calling them, enforces that the model's final answer
+cites only evidence_ids that a tool call actually returned earlier in the same
+conversation (never an invented one), and then hands the finished answer plus
+the full tool transcript to er.agent.verifier for an independent check (see
+that module for why a decision model rather than a second chat model).
 """
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import json
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -23,6 +28,10 @@ from mcp_types import Tool as MCPTool
 from er.config import REPO_ROOT, AppConfig
 
 from .models import AskResult, Citation, Evidence
+from .payloads import fit
+from .retry import error_message, is_transient, timeout
+from .trace import TraceSpan, llm_span, submit_span, tool_span, verifier_span
+from .verifier import verify_answer
 
 # One progress event, emitted as the tool-calling loop runs. The web API turns
 # these into an SSE stream so the UI can show what is happening (which tool is
@@ -126,7 +135,7 @@ async def _call_openrouter(
     }
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
-    async with httpx.AsyncClient(timeout=90) as http:
+    async with httpx.AsyncClient(timeout=timeout(90, cfg.agent.openrouter_connect_timeout_seconds)) as http:
         resp = await http.post(
             f"{cfg.agent.openrouter_base_url}/chat/completions",
             headers={"Authorization": f"Bearer {cfg.openrouter_api_key}"},
@@ -134,6 +143,75 @@ async def _call_openrouter(
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def _backoff(seconds: float) -> None:
+    # Its own function so tests can skip the wait without patching asyncio.
+    await asyncio.sleep(seconds)
+
+
+class ModelUnavailableError(RuntimeError):
+    """The model provider kept failing transiently until retries ran out.
+
+    Its message is what the user sees (the API streams it verbatim), so it
+    names the provider and says it is probably temporary - unlike the raw
+    httpx message it replaces, "Server disconnected without sending a
+    response.", which doesn't say which server. The raw error stays on
+    `__cause__` and in the developer trace."""
+
+
+def _describe(exc: BaseException) -> str:
+    """One line a developer can act on. An HTTP error says which status and
+    which endpoint; anything else says its type, since a bare message like
+    "timed out" is useless without knowing what timed out."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        base = f"HTTP {exc.response.status_code} from {exc.request.url.path}"
+        reason = error_message(exc.response)
+        return f"{base}: {reason}" if reason else base
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
+def _model_view(data: Any, max_chars: int) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """What the model is sent in place of a tool's `data`, and - when that
+    differs from the real thing - a note saying how.
+
+    The note is not decoration. A trimmed subsidiary list reads exactly like a
+    short one, so without it a model can truthfully summarise what it was
+    shown and still be wrong ("it has 12 subsidiaries"). The evidence records'
+    `result_count` is never trimmed, so the true count is always available.
+    """
+    size = len(json.dumps(data, default=str))
+    shown, trimmed = fit(data, max_chars)
+    if not trimmed:
+        return {"data": data}, None
+    note = {
+        "original_chars": size,
+        "sent_chars": len(json.dumps(shown, default=str)) if shown is not None else 0,
+    }
+    if shown is None:
+        note["note"] = (
+            "This result was too large to include at all. Rely on the evidence records' result_count, "
+            "and make a narrower call (e.g. direction='parents', or a smaller depth) for detail."
+        )
+        return {"data": None, "data_truncated": note}, note
+    note["note"] = (
+        "Long lists in this result were trimmed to fit; each trimmed list ends with a marker "
+        "saying how many items were left out. Do not present a trimmed list as complete, and take "
+        "counts from the evidence records' result_count, not from the list length."
+    )
+    return {"data": shown, "data_truncated": note}, note
+
+
+def _tool_error(result: Any) -> str | None:
+    """An MCP tool can fail without raising - the server returns is_error with
+    the message as text content. The loop carries on either way (the model
+    sees the empty result and can recover), but the trace must not show that
+    as a clean call."""
+    if not getattr(result, "is_error", False):
+        return None
+    texts = [getattr(item, "text", "") for item in getattr(result, "content", None) or []]
+    return " ".join(text for text in texts if text) or "Tool returned an error with no message"
 
 
 async def _emit(on_event: EventCallback | None, event: ProgressEvent) -> None:
@@ -147,12 +225,23 @@ async def ask(
     question: str,
     entity_id: str | None = None,
     on_event: EventCallback | None = None,
+    trace: bool = False,
 ) -> AskResult:
     """Run the tool-calling loop for one question. `client` must already be
     connected (entered as an async context manager) to a running
     er.agent.mcp_server instance. If `on_event` is given it is awaited with a
     progress event before/after every tool call, so a streaming caller can
-    render what the agent is doing."""
+    render what the agent is doing.
+
+    Every return path goes through `_finalise`, so an answer can never reach a
+    caller unverified-but-unmarked: it either carries a verification verdict
+    or carries an explicit "not checked".
+
+    With `trace=True`, `on_event` additionally receives a `{"type": "trace",
+    "span": ...}` event as each model turn, tool call, submission and
+    verification completes - see er.agent.trace. Spans are only *built* when
+    tracing is on, so an untraced run pays nothing for them (a relationship
+    tree's trace preview costs a full serialisation of up to ~1.2M chars)."""
     tools_result = await client.list_tools()
     tools_schema = [_mcp_tool_to_openai_schema(t) for t in tools_result.tools] + [SUBMIT_ANSWER_TOOL]
     force_submit_answer = {"type": "function", "function": {"name": "submit_answer"}}
@@ -172,22 +261,100 @@ async def ask(
     ]
 
     evidence_store: dict[str, Evidence] = {}
+    # What the verifier judges the answer against: every tool call made, with
+    # its arguments and what came back. Kept separately from `messages`
+    # because that list also carries the model's own prose, which would let a
+    # confident-sounding assistant turn count as its own supporting record.
+    tool_transcript: list[dict[str, Any]] = []
     nudged_to_submit = False
     must_gather_evidence = True
 
+    run_started = time.monotonic()
+    span_ids = itertools.count(1)
+
+    def _ms(at: float) -> int:
+        return int((at - run_started) * 1000)
+
+    # The model turn currently being acted on. Tool calls and submissions it
+    # requested nest under it in the trace tree (parent_id) - that nesting is
+    # the whole shape of an agent run: turn -> the calls it asked for.
+    turn_span_id: str | None = None
+
+    async def _trace(build: Callable[[str], TraceSpan], parent_id: str | None = None) -> str | None:
+        # Takes a builder rather than a span so nothing is serialised unless
+        # someone is actually listening. Returns the span's id so a turn can
+        # become the parent of what it requested.
+        if not trace:
+            return None
+        span = build(f"s{next(span_ids)}")
+        span.parent_id = parent_id
+        await _emit(on_event, {"type": "trace", "span": span.model_dump()})
+        return span.id
+
+    async def _finalise(result: AskResult) -> AskResult:
+        await _emit(on_event, {"type": "status", "message": "Verifying the answer against the records\u2026"})
+        started = time.monotonic()
+        verification = await verify_answer(cfg, question, result, tool_transcript)
+        finished = time.monotonic()
+        await _trace(
+            lambda span_id: verifier_span(span_id, _ms(started), int((finished - started) * 1000), verification)
+        )
+        result.verification = verification
+        await _emit(
+            on_event,
+            {
+                "type": "verification",
+                "status": verification.status,
+                "message": verification.headline,
+                "detail": verification.detail,
+            },
+        )
+        return result
+
     await _emit(on_event, {"type": "status", "message": "Planning the research…"})
 
-    for _ in range(cfg.agent.max_tool_turns):
+    for turn in range(1, cfg.agent.max_tool_turns + 1):
         # DeepSeek doesn't reliably choose to call submit_answer on its own -
         # it sometimes just answers in plain text with [n] markers already in
         # it. Rather than trust that (citations would come back empty), force
         # the *next* call to go through submit_answer once that happens, so
         # citations are always structured rather than scraped from text.
-        response = await _call_openrouter(
-            cfg,
-            messages,
-            tools_schema,
-            tool_choice=force_search_entity if must_gather_evidence else force_submit_answer if nudged_to_submit else None,
+        tool_choice = force_search_entity if must_gather_evidence else force_submit_answer if nudged_to_submit else None
+        attempts = cfg.agent.openrouter_retries + 1
+        for attempt in range(1, attempts + 1):
+            started = time.monotonic()
+            try:
+                response = await _call_openrouter(cfg, messages, tools_schema, tool_choice=tool_choice)
+                break
+            except Exception as exc:
+                failed = time.monotonic()
+                retrying = is_transient(exc) and attempt < attempts
+                error = _describe(exc) + (f" \u00b7 retrying (attempt {attempt} of {attempts})" if retrying else "")
+                await _trace(
+                    lambda span_id: llm_span(
+                        span_id, turn, cfg.agent.openrouter_model, tool_choice,
+                        _ms(started), int((failed - started) * 1000), error=error,
+                    )
+                )
+                if retrying:
+                    await _emit(
+                        on_event,
+                        {"type": "status", "message": "The model provider dropped the request \u2014 retrying\u2026"},
+                    )
+                    await _backoff(cfg.agent.openrouter_retry_backoff_seconds * 2 ** (attempt - 1))
+                    continue
+                if is_transient(exc):
+                    raise ModelUnavailableError(
+                        f"The model provider (OpenRouter) failed {attempts} times in a row "
+                        f"({_describe(exc)}). This is usually temporary \u2014 try again in a moment."
+                    ) from exc
+                raise
+        finished = time.monotonic()
+        turn_span_id = await _trace(
+            lambda span_id: llm_span(
+                span_id, turn, cfg.agent.openrouter_model, tool_choice,
+                _ms(started), int((finished - started) * 1000), response=response,
+            )
         )
         message = response["choices"][0]["message"]
         tool_calls = message.get("tool_calls") or []
@@ -207,8 +374,12 @@ async def ask(
                 continue
             if nudged_to_submit:
                 # Already forced it once and it still didn't - return the
-                # free text uncited rather than looping forever.
-                return AskResult(answer=message.get("content") or "", citations=[], evidence=evidence_store)
+                # free text uncited rather than looping forever. It still goes
+                # through verification: an uncited answer is exactly the kind
+                # the badge exists to flag.
+                return await _finalise(
+                    AskResult(answer=message.get("content") or "", citations=[], evidence=evidence_store)
+                )
             messages.append(
                 {"role": "user", "content": "Call the submit_answer tool now with your final answer and citations."}
             )
@@ -225,6 +396,17 @@ async def ask(
                 citations = [Citation(**c) for c in args.get("citations", [])]
                 valid_citations = [c for c in citations if c.evidence_id in evidence_store]
                 if must_gather_evidence or not valid_citations:
+                    reason = (
+                        "no data tool had been called yet"
+                        if must_gather_evidence
+                        else "no citation matched evidence returned in this conversation"
+                    )
+                    await _trace(
+                        lambda span_id: submit_span(
+                            span_id, _ms(time.monotonic()), args, list(evidence_store), accepted=False, reason=reason
+                        ),
+                        parent_id=turn_span_id,
+                    )
                     messages.append(
                         {
                             "role": "tool",
@@ -238,6 +420,10 @@ async def ask(
                     must_gather_evidence = not bool(evidence_store)
                     nudged_to_submit = bool(evidence_store)
                     continue
+                await _trace(
+                    lambda span_id: submit_span(span_id, _ms(time.monotonic()), args, list(evidence_store), accepted=True),
+                    parent_id=turn_span_id,
+                )
                 final_result = AskResult(
                     answer=args.get("answer", ""),
                     # Only accept citations to evidence this conversation actually produced -
@@ -249,14 +435,43 @@ async def ask(
                 continue
 
             await _emit(on_event, {"type": "tool_call", "tool": name, "message": _tool_message(name, args)})
-            result = await client.call_tool(name, args)
+            started = time.monotonic()
+            try:
+                result = await client.call_tool(name, args)
+            except Exception as exc:
+                failed = time.monotonic()
+                await _trace(
+                    lambda span_id: tool_span(
+                        span_id, name, args, _ms(started), int((failed - started) * 1000), error=_describe(exc)
+                    ),
+                    parent_id=turn_span_id,
+                )
+                raise
+            finished = time.monotonic()
             payload = result.structured_content or {}
+            tool_error = _tool_error(result)
+            model_data, trimmed = _model_view(payload.get("data", {}), cfg.agent.max_tool_result_chars)
+            await _trace(
+                lambda span_id: tool_span(
+                    span_id, name, args, _ms(started), int((finished - started) * 1000),
+                    payload=payload, error=tool_error, sent_to_model=trimmed,
+                ),
+                parent_id=turn_span_id,
+            )
             for raw_evidence in payload.get("evidence", []):
                 ev = Evidence.model_validate(raw_evidence)
                 evidence_store[ev.evidence_id] = ev
             if evidence_store:
                 must_gather_evidence = False
             new_evidence = payload.get("evidence", [])
+            tool_transcript.append(
+                {
+                    "tool": name,
+                    "arguments": args,
+                    "result": payload.get("data", {}),
+                    "evidence": new_evidence,
+                }
+            )
             await _emit(
                 on_event,
                 {
@@ -277,13 +492,14 @@ async def ask(
                 {
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": json.dumps(
-                        {"data": payload.get("data", {}), "evidence": payload.get("evidence", [])}
-                    ),
+                    # `data` may be a trimmed view (see _model_view); evidence
+                    # never is - it is small, and the model needs every
+                    # evidence_id to cite.
+                    "content": json.dumps({**model_data, "evidence": payload.get("evidence", [])}, default=str),
                 }
             )
 
         if final_result is not None:
-            return final_result
+            return await _finalise(final_result)
 
     raise RuntimeError(f"agent did not produce a final answer within {cfg.agent.max_tool_turns} tool-call turns")

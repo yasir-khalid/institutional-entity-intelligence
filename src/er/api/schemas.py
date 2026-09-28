@@ -95,12 +95,42 @@ class CitationOut(BaseModel):
 class AskRequest(BaseModel):
     question: str
     entity_id: str | None = None
+    # Stream developer trace spans (model turns, tool calls, payloads,
+    # timings) alongside the progress events - see er.agent.trace. Only
+    # /api/ask/stream honours it; a non-streaming response has nowhere to put
+    # a trace.
+    trace: bool = False
+
+
+class VerificationCheckOut(BaseModel):
+    key: str
+    label: str
+    probability: float | None = None
+    threshold: float
+    passed: bool | None = None
+
+
+class VerificationOut(BaseModel):
+    """The answer's verification badge - see er.agent.verifier. "unavailable"
+    (the check did not run) is a different state from "unverified" (it ran and
+    the answer did not hold up); the UI must not collapse the two."""
+
+    status: str
+    headline: str
+    detail: str
+    model: str | None = None
+    checks: list[VerificationCheckOut] = []
+    verdict: str | None = None
+    verdict_confidence: float | None = None
+    latency_ms: int | None = None
+    reason: str | None = None
 
 
 class AskResponse(BaseModel):
     answer: str
     citations: list[CitationOut] = []
     evidence: dict[str, EvidenceOut] = {}
+    verification: VerificationOut | None = None
 
 
 class EntityDetail(BaseModel):

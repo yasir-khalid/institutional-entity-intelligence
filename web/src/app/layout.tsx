@@ -1,23 +1,21 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-/* One superfamily rather than two unrelated Google fonts. IBM Plex Sans and
- * IBM Plex Mono were drawn together, share skeletons and vertical metrics, and
- * were designed for exactly this context - dense technical and financial
- * interfaces - so an identifier set in the mono sits on the same baseline and
- * reads at the same weight as the label beside it. Identifiers are codes, not
- * prose: monospace with tabular figures keeps a column of LEIs scannable. */
-const sans = IBM_Plex_Sans({
+/* Geist and Geist Mono, the pairing supermemory.ai is built on and the one this
+ * UI is styled after. The mono is not just for identifiers: section labels,
+ * buttons and span kinds are set in it too, uppercase and slightly tracked -
+ * that contrast against the sans is most of the look. Identifiers stay mono
+ * with tabular figures so a column of LEIs stays scannable. Both are variable
+ * fonts, so no weight list is needed. */
+const sans = Geist({
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
   display: "swap",
   variable: "--font-sans",
 });
 
-const mono = IBM_Plex_Mono({
+const mono = Geist_Mono({
   subsets: ["latin"],
-  weight: ["400", "500"],
   display: "swap",
   variable: "--font-mono",
 });

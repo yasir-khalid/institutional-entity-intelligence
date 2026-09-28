@@ -1,10 +1,12 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
-import { Bot, Building2, Check, ChevronRight, CircleAlert, FileText, Loader2, Search, Waypoints } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Bot, Building2, Check, ChevronRight, CircleAlert, FileText, Loader2, Search, SquareTerminal, Waypoints } from "lucide-react";
 import SearchBar, { type ResearchMode } from "@/components/SearchBar";
 import EvidenceList from "@/components/EvidenceLayer";
 import Markdown from "@/components/Markdown";
+import VerificationBadge from "@/components/VerificationBadge";
+import DeveloperPanel from "@/components/DeveloperPanel";
 import {
   askQuestionStream,
   getEntityDetail,
@@ -13,7 +15,10 @@ import {
   type AskStreamEvent,
   type EntityDetail,
   type SearchResult,
+  type TraceSpan,
 } from "@/lib/api";
+
+const DEVTOOLS_KEY = "er:developer-view";
 
 const SUGGESTIONS = [
   { label: "Find an entity", query: "Point72", mode: "search" },
@@ -132,6 +137,24 @@ export default function Home() {
   const [detail, setDetail] = useState<EntityDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const railRef = useRef<HTMLElement>(null);
+  // Developer view. The trace belongs to the last *agent* run and outlives a
+  // mode switch on purpose: you notice something odd, flip to Search to check
+  // an entity, and the trace you were debugging is still there.
+  const [devOpen, setDevOpen] = useState(false);
+  const [trace, setTrace] = useState<TraceSpan[]>([]);
+  const [traceQuestion, setTraceQuestion] = useState<string | null>(null);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [traceRunning, setTraceRunning] = useState(false);
+
+  // Restore the panel's open state - devtools stay open across reloads.
+  useEffect(() => {
+    setDevOpen(window.localStorage.getItem(DEVTOOLS_KEY) === "1");
+  }, []);
+
+  function setDeveloperView(next: boolean) {
+    setDevOpen(next);
+    window.localStorage.setItem(DEVTOOLS_KEY, next ? "1" : "0");
+  }
   const hasOutput = Boolean(error) || searchResults !== null || agentResult !== null;
   const agentActive = mode === "agent" && (hasOutput || loading);
 
@@ -156,19 +179,38 @@ export default function Home() {
     setDetail(null);
     try {
       if (activeMode === "agent") {
-        const result = await askQuestionStream(value, null, (event) => {
-          if (event.type === "status" || event.type === "tool_call" || event.type === "tool_result") {
-            setEvents((previous) => [...previous, event]);
-          }
-        });
+        setTrace([]);
+        setTraceQuestion(value);
+        setTraceError(null);
+        setTraceRunning(true);
+        // Always traced, not only while the panel is open: the moment you
+        // want a trace is usually right after an answer looked wrong, and by
+        // then the run is over. Payload previews are capped server-side
+        // (er.agent.trace.MAX_PAYLOAD_CHARS), so this stays bounded.
+        const result = await askQuestionStream(
+          value,
+          null,
+          (event) => {
+            if (event.type === "trace" && event.span) {
+              const span = event.span;
+              setTrace((previous) => [...previous, span]);
+            } else if (event.type === "status" || event.type === "tool_call" || event.type === "tool_result") {
+              setEvents((previous) => [...previous, event]);
+            }
+          },
+          { trace: true },
+        );
         setAgentResult(result);
       } else {
         setSearchResults((await search(value, "name")).results);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "We couldn’t complete that request.");
+      const message = reason instanceof Error ? reason.message : "We couldn’t complete that request.";
+      setError(message);
+      if (activeMode === "agent") setTraceError(message);
     } finally {
       setLoading(false);
+      setTraceRunning(false);
     }
   }
 
@@ -195,10 +237,21 @@ export default function Home() {
   }
 
   return (
-    <main className={`query-app ${hasOutput || loading ? "has-output" : ""} ${agentActive ? "mode-agent" : ""}`}>
+    <main className={`query-app ${hasOutput || loading ? "has-output" : ""} ${agentActive ? "mode-agent" : ""} ${devOpen ? "dev-open" : ""}`}>
       <header className="query-header">
         <a href="#top" className="query-brand" aria-label="Entity Intelligence home"><Logo /><span>Entity intelligence</span></a>
-        <span className="query-header-status"><i /> Research ready</span>
+        <div className="query-header-actions">
+          <span className="query-header-status"><i /> Research ready</span>
+          <button
+            type="button"
+            className="devtools-toggle"
+            aria-pressed={devOpen}
+            aria-controls="developer-panel"
+            onClick={() => setDeveloperView(!devOpen)}
+          >
+            <SquareTerminal /> Developer
+          </button>
+        </div>
       </header>
 
       <section id="top" className={`query-page ${agentActive ? "has-agent" : ""}`}>
@@ -230,6 +283,7 @@ export default function Home() {
                   <div className="answer-body">
                     <span className="answer-label">Entity Intelligence <i>MCP</i></span>
                     <Markdown content={agentResult.answer} citations={agentResult.citations} evidence={agentResult.evidence} onCitationClick={focusEvidence} />
+                    <VerificationBadge verification={agentResult.verification} />
                   </div>
                 </div>}
               </div>
@@ -249,6 +303,17 @@ export default function Home() {
           </section>}
         </div>
       </section>
+
+      <DeveloperPanel
+        open={devOpen}
+        onClose={() => setDeveloperView(false)}
+        spans={trace}
+        running={traceRunning}
+        question={traceQuestion}
+        activity={[...events].reverse().find((event) => event.message)?.message ?? null}
+        error={traceError}
+        onStartAgent={mode === "agent" ? null : () => changeMode("agent")}
+      />
     </main>
   );
 }
