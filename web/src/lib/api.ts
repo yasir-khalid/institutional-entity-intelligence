@@ -77,6 +77,35 @@ export interface Sec13FActivity {
   scale_suspect_filings: string[];
 }
 
+export interface NPortHolding {
+  holding_id: string;
+  issuer_name: string | null;
+  issuer_lei: string | null;
+  cusip: string | null;
+  isin: string | null;
+  asset_category: string | null;
+  payoff_profile: string | null;
+  value_usd: number | null;
+  /** Percent of the fund's net assets, as filed. */
+  percentage: number | null;
+}
+
+/** A registered fund's latest Form N-PORT report, keyed by its series LEI. */
+export interface NPortFundReport {
+  series_lei: string;
+  series_id: string | null;
+  series_name: string | null;
+  cik: string | null;
+  registrant_name: string | null;
+  accession_number: string;
+  report_date: string | null;
+  filing_date: string | null;
+  net_assets: number | null;
+  total_assets: number | null;
+  holding_count: number;
+  top_holdings: NPortHolding[];
+}
+
 /* Relationships from sources other than GLEIF's hierarchy, from the knowledge
    graph (er.entity.connections). Each edge_type is a different claim - bank
    control, >5% beneficial ownership, significant control, insider, succession -
@@ -147,6 +176,7 @@ export interface EntityDetail {
   /** Every identifier attached; `identifiers` holds up to 200 per type. */
   identifier_total: number;
   sec_13f: Sec13FActivity | null;
+  nport: NPortFundReport | null;
   parent_count: number;
   subsidiary_count: number;
   connections: { linked_records: LinkedRecord[]; groups: ConnectionGroup[] };

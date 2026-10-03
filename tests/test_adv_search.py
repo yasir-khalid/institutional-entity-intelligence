@@ -1,3 +1,9 @@
+import zipfile
+
+import duckdb
+
+from er.config import load_config
+from er.datasources.sec_adv.ingest import parse_mappings
 from er.datasources.sec_adv.search import search_pages
 from er.serving.store import ADV_PAGES, MemoryStore
 
@@ -37,3 +43,24 @@ def test_adv_search_returns_the_published_pdf_page_and_exact_text_offset():
     assert match["page_number"] == 7
     assert text[match["match_start"] : match["match_end"]] == "125,000,000"
     assert older_match["pdf_file_name"] == "older.pdf"
+
+
+def test_brochure_mappings_are_read_from_inside_each_monthly_zip(tmp_path):
+    # SEC ships ADV_Brochure_Mapping_<from>_<to>.csv inside each month's zip;
+    # a brochure re-listed in a later month must not be counted twice.
+    cfg = load_config().model_copy(deep=True)
+    cfg.sec_adv.raw_dir = cfg.sec_adv.processed_dir = tmp_path
+    header = "FirmName,SECNumber,CRDNumber,FilingID,BrochureName,BrochureID,BrochureVersion,DateFiled,PDFFileName\n"
+    for month, rows in {
+        "november": ['"A",801-1,1,10,"Part 2A",100,1,"11/05/2024","1_100_1.pdf"\n'],
+        "december": ['"A",801-1,1,10,"Part 2A",100,1,"11/05/2024","1_100_1.pdf"\n',
+                     '"B",801-2,2,20,"Part 2A",200,1,"12/18/2024","2_200_1.pdf"\n'],
+    }.items():
+        with zipfile.ZipFile(tmp_path / f"adv-brochures-2024-{month}.zip", "w") as archive:
+            archive.writestr(f"ADV_Brochure_Mapping_2024_{month}.csv", header + "".join(rows))
+
+    assert parse_mappings(cfg) == 2
+    rows = duckdb.sql(
+        f"SELECT pdf_file_name, date_filed FROM read_parquet('{tmp_path}/sec_adv_brochures.parquet') ORDER BY 1"
+    ).fetchall()
+    assert rows == [("1_100_1.pdf", "2024-11-05"), ("2_200_1.pdf", "2024-12-18")]

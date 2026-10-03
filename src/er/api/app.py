@@ -39,6 +39,7 @@ from er.api.schemas import (
     FactOut,
     MatchDecisionOut,
     MatchReviewOut,
+    NPortFundReportOut,
     ReviewRequest,
     Sec13FActivityOut,
     Sec13FHoldingOut,
@@ -252,6 +253,7 @@ def entity_detail(entity_id: str) -> EntityDetail:
             if sec
             else None
         ),
+        nport=NPortFundReportOut(**profile.nport.model_dump()) if profile.nport else None,
         parent_count=len(profile.hierarchy.upward) if profile.hierarchy else 0,
         subsidiary_count=len(profile.hierarchy.downward) if profile.hierarchy else 0,
         identifier_total=profile.identifier_total,

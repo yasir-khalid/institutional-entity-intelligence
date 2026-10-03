@@ -1,10 +1,12 @@
 """Assembles one EntityProfile: canonical identity + attached identifiers +
-GLEIF relationship neighborhood + SEC 13F activity summary (when available).
+GLEIF relationship neighborhood + SEC 13F activity summary and latest N-PORT
+fund report (when available).
 
 This is the single place a profile is put together - er.cli.entity, the API
 and the agent tools all call get_entity_profile() rather than re-deriving it.
 The heavy joins happen once, at publish time (er.serving.publish); here it is
-an entity document, its 13F filer document, and the hierarchy lookups.
+an entity document, its 13F filer and N-PORT fund documents, and the
+hierarchy lookups.
 """
 
 from __future__ import annotations
@@ -13,11 +15,12 @@ from er.entity.models import (
     EntityIdentifier,
     EntityLineage,
     EntityProfile,
+    NPortFundReport,
     Sec13FActivity,
     Sec13FHoldingSummary,
 )
 from er.graph.build import build_hierarchy
-from er.serving.store import ENTITIES, FILERS, Store
+from er.serving.store import ENTITIES, FILERS, NPORT_FUNDS, MissingIndexError, Store
 
 
 PROFILE_FIELDS = (
@@ -46,6 +49,16 @@ def load_sec_13f_activity(store: Store, cik: str) -> Sec13FActivity:
     )
 
 
+def load_nport_report(store: Store, entity_id: str) -> NPortFundReport | None:
+    """None when the entity isn't an N-PORT fund series, or N-PORT was never
+    published - an optional source must not break the profile."""
+    try:
+        doc = store.get(NPORT_FUNDS, entity_id)
+    except MissingIndexError:
+        return None
+    return NPortFundReport(**doc) if doc else None
+
+
 def get_entity_profile(store: Store, entity_id: str) -> EntityProfile | None:
     doc = store.get(ENTITIES, entity_id, fields=PROFILE_FIELDS)
     if doc is None:
@@ -70,4 +83,5 @@ def get_entity_profile(store: Store, entity_id: str) -> EntityProfile | None:
         identifier_total=doc.get("identifier_total") or 0,
         hierarchy=build_hierarchy(store, entity_id),
         sec_13f=load_sec_13f_activity(store, ciks[0]) if ciks else None,
+        nport=load_nport_report(store, entity_id),
     )

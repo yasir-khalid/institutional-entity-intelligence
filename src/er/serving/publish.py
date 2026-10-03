@@ -21,7 +21,7 @@ from opensearchpy import OpenSearch, helpers
 from er.config import AppConfig
 from er.indexing.opensearch_index import get_client
 
-from .store import ADV_DOCUMENTS, ADV_PAGES, ENTITIES, FILERS, HOLDINGS, OWNERSHIP, RELATIONSHIPS
+from .store import ADV_DOCUMENTS, ADV_PAGES, ENTITIES, FILERS, HOLDINGS, NPORT_FUNDS, OWNERSHIP, RELATIONSHIPS
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ MAPPINGS = {
         "period_date": {"type": "date"},
         "value_usd": {"type": "long"},
     },
+    NPORT_FUNDS: {"series_lei": _KEYWORD, "cik": _KEYWORD, "top_holdings": _STORED_ONLY},
     RELATIONSHIPS: {
         "start_node_id": _KEYWORD,
         "end_node_id": _KEYWORD,
@@ -160,7 +161,7 @@ def build_connections(cfg: AppConfig) -> dict[str, dict]:
                    t.valid_to, t.source_record_ref, t.end_node_id, {percent} AS percent,
                    n.display_name AS other_name, n.node_type AS other_type,
                    count(*) OVER w AS total,
-                   row_number() OVER (w ORDER BY {percent} DESC NULLS LAST, t.valid_from DESC NULLS LAST,
+                   row_number() OVER (w ORDER BY t.valid_to IS NOT NULL, {percent} DESC NULLS LAST, t.valid_from DESC NULLS LAST,
                                       n.display_name) AS rank
             FROM touching t
             LEFT JOIN read_parquet('{nodes}') n ON n.node_id = t.other_node_id
@@ -377,6 +378,50 @@ def holding_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
         yield f"{row['accession_number']}:{row['infotable_sk']}", row
 
 
+def nport_fund_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per fund series LEI: its latest N-PORT report (an amendment replaces the
+    original for the same report date) with net assets and the ten largest
+    holdings by USD value. CURRENCY_VALUE in the SEC data set is the USD value:
+    it equals the holding's percentage of net assets times net assets."""
+    processed = cfg.nport.processed_dir
+    funds = processed / "nport_funds.parquet"
+    holdings = processed / "nport_holdings.parquet"
+    if not (funds.exists() and holdings.exists()):
+        return
+    for row in _rows(f"""
+        WITH latest AS (
+            SELECT * EXCLUDE (row_no) FROM (
+                SELECT *, row_number() OVER (
+                    PARTITION BY series_lei
+                    ORDER BY strptime(report_date, '%d-%b-%Y') DESC, strptime(filing_date, '%d-%b-%Y') DESC,
+                             accession_number DESC) AS row_no
+                FROM read_parquet('{funds}') WHERE series_lei IS NOT NULL
+            ) WHERE row_no = 1
+        ),
+        ranked AS (
+            SELECT h.accession_number, h.holding_id, h.issuer_name, h.issuer_lei, h.issuer_cusip AS cusip, h.isin,
+                   h.asset_category, h.payoff_profile, h.currency_value AS value_usd, h.percentage,
+                   count(*) OVER (PARTITION BY h.accession_number) AS holding_count,
+                   row_number() OVER (PARTITION BY h.accession_number ORDER BY h.currency_value DESC NULLS LAST,
+                                      h.holding_id) AS rank
+            FROM read_parquet('{holdings}') h JOIN latest l USING (accession_number)
+        ),
+        top AS (
+            SELECT accession_number, any_value(holding_count) AS holding_count,
+                   list(struct_pack(holding_id, issuer_name, issuer_lei, cusip, isin, asset_category,
+                                    payoff_profile, value_usd, percentage) ORDER BY rank)
+                       FILTER (WHERE rank <= 10) AS top_holdings
+            FROM ranked GROUP BY accession_number
+        )
+        SELECT l.series_lei, l.series_id, l.series_name, l.cik, l.registrant_name, l.registrant_lei,
+               l.accession_number, l.report_date, l.filing_date, l.net_assets, l.total_assets,
+               l.total_liabilities, coalesce(t.holding_count, 0) AS holding_count,
+               coalesce(t.top_holdings, []) AS top_holdings, l.source_file
+        FROM latest l LEFT JOIN top t USING (accession_number)
+    """):
+        yield row["series_lei"], row
+
+
 def relationship_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
     path = cfg.gleif.processed_dir / "gleif_relationships.parquet"
     if not path.exists():
@@ -416,6 +461,7 @@ BUILDERS: dict[str, Callable[[AppConfig], Iterator[tuple[str, dict]]]] = {
     ENTITIES: entity_documents,
     FILERS: filer_documents,
     HOLDINGS: holding_documents,
+    NPORT_FUNDS: nport_fund_documents,
     RELATIONSHIPS: relationship_documents,
     OWNERSHIP: ownership_documents,
     ADV_DOCUMENTS: adv_document_documents,

@@ -5,7 +5,7 @@ import pyarrow.parquet as pq
 
 from er.config import load_config
 from er.entity.resolution import load_match_decisions, record_review
-from er.serving.publish import adv_document_documents, adv_page_documents, entity_documents
+from er.serving.publish import adv_document_documents, adv_page_documents, entity_documents, nport_fund_documents
 from er.serving.store import ENTITIES, MemoryStore, OpenSearchStore
 
 
@@ -129,3 +129,34 @@ def test_adv_documents_and_pages_become_serving_documents(tmp_path):
     assert published_document["source_file"] == "archive.zip:brochure.pdf"
     assert page_id == "abc:1:archive.zip:brochure.pdf"
     assert published_page["text"] == page["text"]
+
+
+def test_nport_fund_document_is_the_latest_report_with_holdings_ranked_by_usd_value(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.nport.processed_dir = tmp_path
+    fund = {"series_lei": "FUNDLEI", "series_id": "S1", "series_name": "Global Fund", "cik": "0000000001",
+            "registrant_name": "Trust", "registrant_lei": "TRUSTLEI", "total_assets": 1.0,
+            "total_liabilities": 0.0, "source_file": "q.zip", "snapshot_date": None, "ingested_at": None}
+    _write(tmp_path / "nport_funds.parquet", [
+        {**fund, "accession_number": "older", "report_date": "31-JAN-2026", "filing_date": "30-MAR-2026", "net_assets": 1.0},
+        {**fund, "accession_number": "original", "report_date": "31-MAR-2026", "filing_date": "29-MAY-2026", "net_assets": 2.0},
+        {**fund, "accession_number": "amended", "report_date": "31-MAR-2026", "filing_date": "15-JUN-2026", "net_assets": 3.0},
+    ])
+    holding = {"issuer_lei": None, "issuer_title": None, "isin": None, "ticker": None, "balance": None, "unit": None,
+               "exchange_rate": None, "payoff_profile": "Long", "asset_category": "EC", "issuer_type": None,
+               "investment_country": None, "fair_value_level": None, "derivative_category": None,
+               "source_file": "q.zip", "snapshot_date": None, "ingested_at": None}
+    _write(tmp_path / "nport_holdings.parquet", [
+        {**holding, "accession_number": "amended", "holding_id": "h1", "issuer_name": "Small", "issuer_cusip": "C1",
+         "currency_code": "JPY", "currency_value": 10.0, "percentage": 1.0},
+        {**holding, "accession_number": "amended", "holding_id": "h2", "issuer_name": "Large", "issuer_cusip": "C2",
+         "currency_code": "EUR", "currency_value": 900.0, "percentage": 30.0},
+        {**holding, "accession_number": "original", "holding_id": "h3", "issuer_name": "Superseded", "issuer_cusip": "C3",
+         "currency_code": "USD", "currency_value": 5000.0, "percentage": 50.0},
+    ])
+
+    ((doc_id, doc),) = list(nport_fund_documents(cfg))
+
+    assert doc_id == "FUNDLEI"
+    assert (doc["accession_number"], doc["net_assets"], doc["holding_count"]) == ("amended", 3.0, 2)
+    assert [(h["issuer_name"], h["value_usd"]) for h in doc["top_holdings"]] == [("Large", 900.0), ("Small", 10.0)]

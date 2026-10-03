@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from er.agent import orchestrator
-from er.agent.tools import get_entity_profile_tool, get_relationship_hierarchy
+from er.agent.tools import get_entity_connections, get_entity_profile_tool, get_relationship_hierarchy
 from er.config import (
     AppConfig,
     BenchmarkConfig,
@@ -122,6 +122,35 @@ def test_profile_with_identifiers_emits_identifier_evidence(store):
     identifier_evidence = next(e for e in result.evidence if e.source == "Attached source identifiers")
     assert identifier_evidence.result_count == 1
     assert identifier_evidence.record_refs == ["LEI_A"]
+
+
+def test_connections_keep_end_dates_citable_and_say_when_a_group_is_capped(store):
+    controllers = [
+        {"edge_type": "SIGNIFICANT_CONTROL", "direction": "incoming", "other_node_id": f"ch-psc:{n}",
+         "other_name": f"Person {n}", "other_type": "REPORTING_OWNER", "source": "companies_house_psc",
+         "valid_from": "2020-01-01", "valid_to": "2024-06-30" if n == 1 else None, "percent": None, "source_url": None}
+        for n in range(2)
+    ]
+    store.put(ENTITIES, "LEI_UK", {
+        "entity_id": "LEI_UK",
+        "connections": {
+            "linked_records": [{"node_id": "uk-company:OC380907", "display_name": "AHL", "source": "gleif_registration_id"}],
+            "groups": [{"edge_type": "SIGNIFICANT_CONTROL", "direction": "incoming", "total": 45, "connections": controllers}],
+        },
+    })
+
+    result = get_entity_connections(store, "LEI_UK")
+
+    current, ended = result.data["groups"][0]["connections"]
+    facts = {fact.fact_id: fact for fact in result.facts}
+    assert ended["ended"] and facts[ended["valid_to_fact_id"]].value == "2024-06-30"
+    assert not current["ended"] and "valid_to_fact_id" not in current
+    assert facts[result.data["linked_records"][0]["value_fact_id"]].value == "OC380907"
+    group_evidence = result.evidence[1]
+    assert group_evidence.source == "Companies House PSC register"
+    assert group_evidence.result_count == 45 and group_evidence.warnings == [
+        "Shows 2 of 45: every current entry, then the most recent ended ones."
+    ]
 
 
 # --- get_relationship_hierarchy: reads relationship documents + entity names ---

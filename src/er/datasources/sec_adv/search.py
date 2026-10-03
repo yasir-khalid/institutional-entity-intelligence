@@ -38,8 +38,10 @@ def search_pages(store: Store, query: str, crd_number: str | None = None, limit:
         start = text.casefold().find(query.casefold())
         if start < 0:
             continue
+        # Most of the context comes after the match, so a section heading
+        # arrives with the section it introduces.
         left = max(start - 180, 0)
-        right = min(start + len(query) + 220, len(text))
+        right = min(start + len(query) + 900, len(text))
         matches.append(
             {
                 "crd_number": row["crd_number"],

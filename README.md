@@ -82,16 +82,16 @@ never folded into one "parent".
 |---|---|---|---|---|
 | **GLEIF LEI** (`gleif`) | Global legal-entity register: Level 1 entities, Level 2 relationships and reporting exceptions | The entity universe and names matching runs against; accounting parent / ultimate parent, fund-manager, sub-fund, branch and successor edges; exceptions that say *why* a parent is missing | is the LEI | 3.4M entities, 669k relationships, 6.2M exceptions |
 | GLEIF ISIN ↔ LEI (`gleif`) | GLEIF's issuer mapping file | ISIN identifiers on issuers; the positive pairs the benchmark is generated from | LEI in the file | 9.3M ISINs |
-| GLEIF BIC / MIC / OpenCorporates mappings (`gleif`) | Registration-authority crosswalk files | SWIFT, market and company-register identifiers on an LEI | LEI in the file | not loaded |
+| GLEIF BIC / MIC / OpenCorporates mappings (`gleif`) | Registration-authority crosswalk files | SWIFT, market and company-register identifiers on an LEI | LEI in the file | 808k: 768k OpenCorporates, 39k BIC, 1k MIC |
 | **SEC Form 13F** (`sec_13f`) | Quarterly long US-equity holdings of managers with $100M+ discretion | Who a manager is (filer CIK, name, address), latest reported holdings, position history by CUSIP; filings that don't reconcile go to quarantine | the only crosswalk: matcher resolves each filer CIK (AUTO_MATCH / REVIEW / UNMATCHED, human reviews on top) | 11.8k filings, 3.8M rows, 10.7k filers → 3,247 auto-matched, 853 for review |
 | **SEC Schedule 13D/G** (`sec_13dg`) | Disclosures by anyone crossing 5% of a listed company's voting class | Beneficial-owner edges with percent of class, voting/dispositive power and event date; issuer ↔ CUSIP links | issuer and reporting-person CIKs, through the crosswalk | 21.7k ownership rows (structured XML, Dec 2024 onward) |
 | **SEC insider filings** (`sec_insiders`) | Forms 3/4/5 by officers, directors and 10% owners | Insider-of edges (role, title) and their transactions | issuer CIK, through the crosswalk | 60k relationships, 128k transactions |
 | **SEC series & class** (`sec_series_class`) | Registered investment-company register | Registrant → fund series → share class structure, with series and class IDs and tickers | registrant CIK, through the crosswalk | 43k classes, 19k series |
-| SEC submissions (`sec_submissions`) | EDGAR company metadata for every CIK | Canonical CIK names, former names, addresses, SIC, tickers - better matching inputs for every CIK-keyed source | CIK | not loaded |
-| SEC N-PORT (`nport`) | Registered funds' portfolio reports (filed monthly, published quarterly) | Fund-level holdings beyond 13F (debt, derivatives, non-US); registrant and series LEIs the filings state themselves | LEIs reported in the filing | not loaded |
-| OpenFIGI (`openfigi`) | Bloomberg's open security-identifier mapping | FIGIs, tickers and security types for 13F CUSIPs, so a security is an entity of its own, never an identifier of its issuer | CUSIP → security node | not loaded |
-| SEC Form ADV (`sec_adv`) | Adviser registrations and brochure PDFs | Full-text, page-cited brochure search for the agent and the PDF viewer | CRD / SEC number | not loaded (indexes exist, empty) |
-| Companies House + PSC (`companies_house`) | UK company register and persons with significant control | UK company numbers and status; significant-control edges with their nature of control (e.g. 25-50% of shares) | company number = GLEIF registration ID | not loaded |
+| SEC submissions (`sec_submissions`) | EDGAR company metadata for every CIK | Canonical CIK names, former names, addresses, SIC, tickers - better matching inputs for every CIK-keyed source | CIK | 993k CIKs |
+| SEC N-PORT (`nport`) | Registered funds' portfolio reports (filed monthly, published quarterly) | Fund-level holdings beyond 13F (debt, derivatives, non-US); net assets and largest holdings on a fund's profile and as agent facts; registrant and series LEIs the filings state themselves | LEIs reported in the filing | 14.4k fund reports (2026 Q2 file), 5.3M holdings; latest report per fund on its profile |
+| OpenFIGI (`openfigi`) | Bloomberg's open security-identifier mapping | FIGIs, tickers and security types for 13F CUSIPs, so a security is an entity of its own, never an identifier of its issuer | CUSIP → security node | partial until the ~3 h keyless fetch completes |
+| SEC Form ADV (`sec_adv`) | Adviser registrations and brochure PDFs | Full-text, page-cited brochure search for the agent and the PDF viewer | CRD / SEC number | 996 brochures, 28.6k pages (Dec 2024; add more monthly zips for more) |
+| Companies House + PSC (`companies_house`) | UK company register and persons with significant control | UK company numbers and status; significant-control edges with their nature of control (e.g. 25-50% of shares) | company number = GLEIF registration ID | 5.7M companies, 16.0M PSC records; 101.8k companies linked to an LEI |
 | FFIEC NIC (`ffiec_nic`) | Federal Reserve register of US banks and holding companies | RSSD IDs; bank-control edges with percent ownership; mergers as successor edges | LEI the NIC record carries | not loaded |
 
 Two consequences worth knowing. 13D/G, insider and fund-structure records
@@ -118,12 +118,12 @@ make pipeline        # ingest the core GLEIF + 13F sources, then index/validate/
 make ingest-gleif     # GLEIF XML/CSV -> data/processed/*.parquet (~10-15 min)
 make ingest-sec-13f   # SEC 13F bulk TSVs -> data/processed/*.parquet (~1 min)
 make ingest-sec-series-class
-make ingest-sec-submissions   # large SEC bulk download (~1.5 GB)
+make ingest-sec-submissions   # downloads SEC's submissions.zip itself (~1.5 GB, ~6 min)
 make ingest-sec-insiders
-make ingest-sec-adv          # expects brochure mapping CSV/PDF zips in data/raw/sec_adv
-make ingest-companies-house  # expects company CSV and PSC JSON snapshots
-make ingest-nport             # expects a quarterly *nport.zip in data/raw/nport
-make ingest-openfigi          # enriches 13F CUSIPs; OPENFIGI_API_KEY is optional
+make ingest-sec-adv           # monthly adv-brochures-*.zip in data/raw/sec_adv (each carries its mapping CSV)
+make ingest-companies-house   # BasicCompanyDataAsOneFile-*.zip + PSC snapshot zip in data/raw/companies_house
+make ingest-nport             # a quarterly *_nport.zip in data/raw/nport (~1 min)
+make ingest-openfigi          # maps 13F CUSIPs; ~3 h without OPENFIGI_API_KEY, minutes with one (cached, resumable)
 make ingest-sec-13dg          # structured Schedule 13D/G from EDGAR (~40 min a quarter;
                               # --quarter 2026Q1 / --limit N via python -m er.cli.ingest_sec_13dg)
 make ingest-ffiec-nic         # expects the NIC CSV zips in data/raw/ffiec_nic (FFIEC blocks scripted downloads)
@@ -133,6 +133,17 @@ make validate         # sanity-check the processed tables
 make benchmark        # data/benchmark/*.parquet (~1 sec, DuckDB)
 make publish          # Parquet -> OpenSearch serving indexes the API reads (~10 min)
 ```
+
+Raw files the scripted ingests don't fetch themselves: N-PORT from SEC's
+[Form N-PORT data sets](https://www.sec.gov/data-research/sec-markets-data/form-n-port-data-sets),
+ADV brochures from SEC's [Form ADV data](https://www.sec.gov/foia-services/frequently-requested-documents/form-adv-data)
+page, Companies House from [download.companieshouse.gov.uk](https://download.companieshouse.gov.uk/en_output.html)
+(and its [PSC snapshot](https://download.companieshouse.gov.uk/en_pscdata.html)),
+GLEIF's BIC/MIC/OpenCorporates mappings from its
+[mapping API](https://mapping.gleif.org/api/v2/bic-lei/latest) into `data/raw` (parsed by
+`make ingest-gleif`), and FFIEC NIC by hand from
+[ffiec.gov](https://www.ffiec.gov/npw/FinancialReport/DataDownload), which puts a CAPTCHA
+in front of scripts.
 
 **Where data lives.** Parquet in `data/processed` is the build store: every
 ingest, crosswalk and graph build writes it. The API, agent tools and CLIs
@@ -147,6 +158,7 @@ an alias and is swapped in only when fully loaded.
 | `er_13f_filers` | 13F filer (CIK): latest-period summary, top holdings, quarantine and scale flags, LEI link | 13F activity, CUSIP search |
 | `er_13f_holdings` | effective information-table row | position history, CUSIP search |
 | `er_13dg_ownership` | 13D/G reporting person per filing | beneficial owners |
+| `er_nport_funds` | fund series LEI: latest N-PORT report, net assets, top 10 holdings by USD value | fund profiles, agent facts |
 | `er_sec_adv_pages` | extracted Form ADV PDF page | brochure full-text search |
 | `er_sec_adv_documents` | Form ADV PDF metadata + local archive member | resolve a locally mounted PDF |
 | `er_match_reviews` | human review, written by the API | reviews (`make pull-reviews` copies them back for `build-knowledge-graph`) |
@@ -183,7 +195,7 @@ make build-entities
 
 # Ask a question through the MCP tools (search_entity, get_entity_profile,
 # get_relationship_hierarchy, search_adv_documents, get_position_history,
-# get_beneficial_owners). Numeric claims use retrieval-time fact IDs; the
+# get_beneficial_owners, get_entity_connections). Numeric claims use retrieval-time fact IDs; the
 # submission gate re-reads their source addresses before rendering them.
 # Derived numbers (a position's change between 13F reports) come from
 # registered formulas in er.knowledge.formulas, and the evidence card shows the

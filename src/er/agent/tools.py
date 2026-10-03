@@ -17,6 +17,8 @@ from urllib.parse import quote
 
 from er.config import AppConfig
 from er.datasources.sec_adv.search import search_pages
+from er.entity.connections import load_connections
+from er.entity.models import NPortFundReport
 from er.entity.ownership import load_beneficial_owners
 from er.entity.positions import load_position_rows
 from er.entity.profile import get_entity_profile
@@ -33,6 +35,10 @@ from .models import Derivation, Evidence, Fact, FactAddress, ToolResult
 THIRTEEN_F_CAVEAT = (
     "Latest reported 13F holdings only - excludes short positions, derivatives, "
     "non-US securities, private investments and sub-threshold positions."
+)
+NPORT_CAVEAT = (
+    "Form N-PORT is a dated monthly snapshot made public with a 60-day lag - "
+    "the portfolio as of the report date, not today."
 )
 
 
@@ -369,7 +375,74 @@ def get_entity_profile_tool(store: Store, entity_id: str) -> ToolResult:
                 )
             )
 
+    if profile.nport:
+        _add_nport_facts(profile.nport, entity_id, qh, evidence, facts)
+
     return ToolResult(data={"found": True, "profile": profile.model_dump()}, evidence=evidence, facts=facts)
+
+
+def _add_nport_facts(report: NPortFundReport, entity_id: str, qh: str, evidence: list, facts: list) -> None:
+    report_evidence = Evidence(
+        evidence_id=_evidence_id(),
+        source="SEC Form N-PORT report",
+        source_timestamp=report.filing_date,
+        fact_type="lookup",
+        criteria=[f"Series LEI = {report.series_lei}", "Latest report; an amendment replaces its original"],
+        record_refs=[report.accession_number],
+        fields_used=["report_date", "net_assets", "holding_count", "top_holdings"],
+        result_count=report.holding_count,
+        query_hash=qh,
+        warnings=[NPORT_CAVEAT],
+        source_uri=_edgar_filing_url(report.cik, report.accession_number) if report.cik else None,
+    )
+    evidence.append(report_evidence)
+    locator = f"nport_funds.parquet:accession={report.accession_number}"
+    for field, unit in (
+        ("series_name", None),
+        ("accession_number", None),
+        ("report_date", None),
+        ("filing_date", None),
+        ("net_assets", "USD"),
+        ("total_assets", "USD"),
+        ("holding_count", None),
+    ):
+        value = getattr(report, field)
+        if value is not None:
+            facts.append(
+                _fact(
+                    report_evidence,
+                    subject=entity_id,
+                    predicate=f"nport.{field}",
+                    value=value,
+                    unit=unit,
+                    document_id=report.accession_number,
+                    locator=locator,
+                    field=field,
+                    as_of=report.report_date,
+                )
+            )
+    for holding in report.top_holdings:
+        holding_locator = f"nport_holdings.parquet:accession={report.accession_number}:holding={holding.holding_id}"
+        for field, value, unit in (
+            ("value_usd", holding.value_usd, "USD"),
+            ("percentage", holding.percentage, "percent"),
+            ("cusip", holding.cusip, None),
+            ("isin", holding.isin, None),
+        ):
+            if value is not None:
+                facts.append(
+                    _fact(
+                        report_evidence,
+                        subject=entity_id,
+                        predicate=f"nport.holding_{field}",
+                        value=value,
+                        unit=unit,
+                        document_id=report.accession_number,
+                        locator=holding_locator,
+                        field=field,
+                        as_of=report.report_date,
+                    )
+                )
 
 
 def _count_nodes(node: HierarchyNode) -> int:
@@ -439,6 +512,21 @@ def search_adv_documents(
             page=match["page_number"],
         )
         evidence.append(item_evidence)
+        for field in ("crd_number", "brochure_id", "page_number"):
+            facts.append(
+                _fact(
+                    item_evidence,
+                    subject=f"crd:{match['crd_number']}",
+                    predicate=f"document.{field}",
+                    value=match[field],
+                    document_id=match["pdf_file_name"],
+                    locator=f"pdf:{match['content_hash']}:page={match['page_number']}",
+                    field=field,
+                    as_of=match["snapshot_date"],
+                    uri=f"{match['pdf_file_name']}#page={match['page_number']}",
+                    page=match["page_number"],
+                )
+            )
         for token in _NUMBER_IN_TEXT.finditer(match["snippet"]):
             char_start = match["snippet_start"] + token.start()
             char_end = match["snippet_start"] + token.end()
@@ -621,6 +709,117 @@ def get_position_history(store: Store, cik: str, cusip: str, periods: int = 4) -
         evidence=[source_evidence, derivation_evidence],
         facts=facts,
         derivations=derivations,
+    )
+
+
+CONNECTION_SOURCES = {
+    "SIGNIFICANT_CONTROL": "Companies House PSC register",
+    "BANK_CONTROL_PARENT": "FFIEC NIC bank relationship",
+    "BENEFICIAL_OWNER": "SEC Schedule 13D/G",
+    "INSIDER_OF": "SEC Forms 3/4/5",
+    "SUCCEEDED_BY": "LEI succession",
+}
+
+
+def _capped_warning(group) -> list[str]:
+    # Publish lists current connections before ended ones, so a capped list
+    # that already reaches an ended one holds every current one.
+    shown = len(group.connections)
+    if group.total <= shown:
+        return []
+    if any(connection.valid_to for connection in group.connections):
+        return [f"Shows {shown} of {group.total}: every current entry, then the most recent ended ones."]
+    return [f"Shows {shown} of {group.total}, all current; more current entries are not listed."]
+
+
+def get_entity_connections(store: Store, entity_id: str, edge_type: str | None = None) -> ToolResult:
+    """Relationships from sources other than GLEIF's hierarchy, one group per
+    kind of claim, plus the records in other sources linked to this LEI."""
+    qh = _query_hash("get_entity_connections", entity_id=entity_id, edge_type=edge_type)
+    connections = load_connections(store, entity_id)
+    evidence: list[Evidence] = []
+    facts: list[Fact] = []
+
+    linked = []
+    if connections.linked_records:
+        linked_evidence = Evidence(
+            evidence_id=_evidence_id(),
+            source="Knowledge graph SAME_AS links",
+            fact_type="records",
+            criteria=[f"Records linked to LEI {entity_id}"],
+            record_refs=[record.node_id for record in connections.linked_records],
+            fields_used=["node_id", "source"],
+            result_count=len(connections.linked_records),
+            query_hash=qh,
+        )
+        evidence.append(linked_evidence)
+        for record in connections.linked_records:
+            kind, _, value = record.node_id.partition(":")
+            fact = _fact(
+                linked_evidence,
+                subject=entity_id,
+                predicate=f"linked_record.{kind}",
+                value=value,
+                document_id=entity_id,
+                locator=f"knowledge_edges.parquet:SAME_AS:{record.node_id}->lei:{entity_id}",
+                field="node_id",
+            )
+            facts.append(fact)
+            linked.append({**record.model_dump(), "value_fact_id": fact.fact_id})
+
+    groups = []
+    for group in connections.groups:
+        if edge_type and group.edge_type != edge_type:
+            continue
+        group_evidence = Evidence(
+            evidence_id=_evidence_id(),
+            source=CONNECTION_SOURCES.get(group.edge_type, group.edge_type),
+            fact_type="records",
+            criteria=[f"LEI = {entity_id}", f"Edge = {group.edge_type} ({group.direction})"],
+            record_refs=[connection.other_node_id for connection in group.connections],
+            fields_used=["other_name", "valid_from", "valid_to", "percent"],
+            result_count=group.total,
+            query_hash=qh,
+            warnings=_capped_warning(group),
+        )
+        evidence.append(group_evidence)
+        rows = []
+        for connection in group.connections:
+            ends = (connection.other_node_id, f"lei:{entity_id}")
+            start, end = ends if connection.direction == "incoming" else ends[::-1]
+            row = {
+                "other_name": connection.other_name,
+                "other_node_id": connection.other_node_id,
+                "other_type": connection.other_type,
+                "ended": connection.valid_to is not None,
+            }
+            for field, value, unit in (
+                ("valid_from", connection.valid_from, None),
+                ("valid_to", connection.valid_to, None),
+                ("percent", connection.percent, "percent"),
+            ):
+                if value is None:
+                    continue
+                fact = _fact(
+                    group_evidence,
+                    subject=connection.other_node_id,
+                    predicate=f"connection.{field}",
+                    value=value,
+                    unit=unit,
+                    document_id=connection.source,
+                    locator=f"knowledge_edges.parquet:{group.edge_type}:{start}->{end}",
+                    field=field,
+                    uri=connection.source_url,
+                )
+                facts.append(fact)
+                row[f"{field}_fact_id"] = fact.fact_id
+            rows.append(row)
+        groups.append({"edge_type": group.edge_type, "direction": group.direction, "total": group.total, "connections": rows})
+
+    return ToolResult(
+        data={"entity_id": entity_id, "linked_records": linked, "groups": groups},
+        evidence=evidence,
+        facts=facts,
     )
 
 

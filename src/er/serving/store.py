@@ -24,6 +24,7 @@ from er.config import AppConfig
 ENTITIES = "entities"
 FILERS = "13f_filers"
 HOLDINGS = "13f_holdings"
+NPORT_FUNDS = "nport_funds"
 RELATIONSHIPS = "gleif_relationships"
 OWNERSHIP = "13dg_ownership"
 ADV_DOCUMENTS = "sec_adv_documents"

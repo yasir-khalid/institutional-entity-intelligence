@@ -48,6 +48,10 @@ profile** (`EntityProfile.tsx`) below the list:
   loads its position across recent reports (`GET /api/positions/{cik}/{cusip}`).
   Each total and change has a formula toggle that unfolds to the filed
   information-table rows and their EDGAR filing.
+- **Latest N-PORT report**, when the entity is a registered fund series: net
+  assets, holding count and the ten largest holdings by USD value with their
+  share of net assets, linked to the filing on EDGAR. N-PORT covers the whole
+  portfolio but is a dated snapshot made public 60 days late, and says so.
 
 The GLEIF hierarchy shows as parent and child counts only. The indented tree
 (`EntityTreeView.tsx`, below) is kept but not mounted since the restyle.

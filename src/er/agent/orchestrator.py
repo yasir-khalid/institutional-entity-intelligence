@@ -57,6 +57,8 @@ def _tool_message(name: str, args: dict[str, Any]) -> str:
         return f"Searching Form ADV brochures for “{args.get('query', '')}”"
     if name == "get_position_history":
         return f"Reading 13F position history for CUSIP {args.get('cusip', '')}"
+    if name == "get_entity_connections":
+        return f"Reading ownership and control records for {args.get('entity_id', 'the entity')}"
     if name == "get_beneficial_owners":
         return "Reading Schedule 13D/G beneficial owners"
     return f"Calling {name}"
@@ -64,7 +66,9 @@ def _tool_message(name: str, args: dict[str, Any]) -> str:
 SYSTEM_PROMPT = """You are an assistant answering questions about legal entities \
 (companies, funds, managers) using GLEIF and SEC filing data, via tools that query \
 that data directly. Always call a tool to look up real data before stating a \
-fact - never invent identifiers, dates, counts, or relationships.
+fact - never invent identifiers, dates, counts, or relationships. What an \
+adviser says about itself (fees, strategy, conflicts) comes from its Form ADV \
+brochure text, through search_adv_documents.
 
 Every tool result contains an `evidence` array of objects with an `evidence_id` \
 field (looking like "ev_xxxxxxxxxx") - that exact string, copied verbatim, is \
@@ -86,8 +90,10 @@ percentage, a total): use a derived fact a tool returned, which records the \
 formula and the facts it was computed from.
 
 "Owner", "holder" and "parent" are different relationships here. A 13F holding \
-means the manager reported investment discretion over the position; a Schedule \
-13D/G owner reported beneficial ownership of more than 5% of a class; a GLEIF \
+means the manager reported investment discretion over the position; an N-PORT \
+holding is a position in a registered fund's own portfolio; a Schedule \
+13D/G owner reported beneficial ownership of more than 5% of a class; a UK \
+person with significant control is a Companies House PSC filing; a GLEIF \
 parent is an accounting-consolidation parent. Name the one the evidence shows.
 
 When you are ready to answer, call the `submit_answer` tool exactly once. Its \
@@ -410,7 +416,11 @@ async def ask(
 
     await _emit(on_event, {"type": "status", "message": "Planning the research…"})
 
-    for turn in range(1, cfg.agent.max_tool_turns + 1):
+    for turn in range(1, cfg.agent.max_tool_turns + 2):
+        # The extra turn exists only to resubmit an answer the gate rejected on
+        # the last turn - the budget caps research, not fixing a citation.
+        if turn > cfg.agent.max_tool_turns and not nudged_to_submit:
+            break
         # DeepSeek doesn't reliably choose to call submit_answer on its own -
         # it sometimes just answers in plain text with [n] markers already in
         # it. Rather than trust that (citations would come back empty), force
@@ -418,7 +428,7 @@ async def ask(
         # citations are always structured rather than scraped from text.
         # A model still exploring on its last turn would otherwise run out the
         # budget with evidence in hand and no answer.
-        out_of_turns = turn == cfg.agent.max_tool_turns and bool(evidence_store)
+        out_of_turns = turn >= cfg.agent.max_tool_turns and bool(evidence_store)
         if must_gather_evidence:
             tool_choice = force_search_entity
         elif nudged_to_submit or out_of_turns:

@@ -1080,3 +1080,63 @@ the holding's value was a fact. The profile tool now emits the CUSIP as a fact
 at the same address. And a model still calling tools on its last turn ran out
 the budget with evidence in hand. In one run it spent three calls on the empty
 ADV index. The last turn now forces `submit_answer`.
+
+## Phase 22: loading the remaining sources, and N-PORT on fund profiles
+
+Six sources had ingest code and unit tests but no data: nobody had downloaded
+their raw files, so their Parquet, graph edges and serving documents didn't
+exist and the agent could not see them. Loading them for real found two
+ingests that could never have worked on the files the publishers ship.
+
+Form ADV looked for `*mapping*.csv` beside the brochure zips. SEC puts the
+mapping inside each monthly zip and names it `ADV_Brochure_Mapping_...csv`,
+capital M, which a case-sensitive glob misses; it also read only the newest
+mapping, so a second month's PDFs would have been skipped. Mappings are now
+read from inside every zip, case-insensitively, deduplicated by PDF name.
+
+Companies House globbed `*psc*` for the PSC snapshot, which matches the
+multi-part `psc-snapshot-..._1of32.zip` files but not the single
+`persons-with-significant-control-snapshot-....zip`. With no match it wrote
+zero significant-control rows and reported success. Both names are accepted
+now, and a missing snapshot is an error.
+
+N-PORT reports are keyed by the fund's own series LEI (13,537 of 13,548 are in
+GLEIF), so a fund's profile now carries its latest report the way a manager's
+carries 13F: net assets, holding count and the ten largest holdings by USD
+value, published as `er_nport_funds` and emitted by the profile tool as
+addressed facts. An amendment replaces its original for the same report date.
+`CURRENCY_VALUE` in the SEC data set is the USD value: it equals percent of
+net assets times net assets to the cent, including for EUR, JPY and INR
+holdings.
+
+Loaded: SEC submissions (993k CIKs), N-PORT 2026 Q2 (14.4k fund reports, 5.3M
+holdings), GLEIF mappings (768k OpenCorporates, 39k BIC, 1k MIC), Form ADV
+December 2024 (996 brochures, 28.6k pages, no extraction errors) and Companies
+House (5.7M companies, 16.0M PSC records). The graph gained 16.0M
+significant-control edges and 101.8k UK companies linked to an LEI by
+registration number; N-PORT's own registrant and series LEIs add 14.9k CIK and
+series links, four times what the 13F crosswalk resolves, so more 13D/G and
+insider records reach a profile. OpenFIGI runs at 10 CUSIPs a request without
+an API key (about 3 hours for 33.7k CUSIPs, cached per batch). FFIEC NIC puts a
+CAPTCHA in front of its downloads, so it still needs a manual download.
+
+Live agent runs on the new data surfaced three more gaps. The ADV search tool
+is an exact-phrase match - so a citation can point at exact characters - but
+its description didn't say so, and the model sent keyword lists that never
+matched; when it did hit a "Fees and Compensation" heading, the snippet ended
+220 characters later, before the fees. The description now asks for a literal
+phrase, and a snippet carries 900 characters after the match. A brochure's
+CRD number, brochure ID and page were not facts, so the gate rejected them like
+the CUSIP before; they are now. And a model that researched through its last
+turn, then had its forced submission rejected, failed with evidence in hand:
+one extra turn now exists, used only to resubmit after a rejection.
+
+The graph's other relationships - PSC significant control, FFIEC bank
+control, insider roles, successions, and the records linked to an LEI - were on
+the web profile but out of the agent's reach: no tool read them. A
+`get_entity_connections` tool now returns them one group per kind of claim,
+with start and end dates and control percentages as facts, so a ceased
+controller can be cited as ceased. Publish lists current connections before
+ended ones within each capped group (25 per group), so a capped list that
+already reaches an ended entry holds every current one, and the tool says so:
+AHL Partners LLP has 45 PSC records, of which the 13 current all fit.

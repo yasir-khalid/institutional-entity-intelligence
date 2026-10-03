@@ -80,6 +80,33 @@ class Sec13FActivityOut(BaseModel):
     scale_suspect_filings: list[str] = []
 
 
+class NPortHoldingOut(BaseModel):
+    holding_id: str
+    issuer_name: str | None = None
+    issuer_lei: str | None = None
+    cusip: str | None = None
+    isin: str | None = None
+    asset_category: str | None = None
+    payoff_profile: str | None = None
+    value_usd: float | None = None
+    percentage: float | None = None
+
+
+class NPortFundReportOut(BaseModel):
+    series_lei: str
+    series_id: str | None = None
+    series_name: str | None = None
+    cik: str | None = None
+    registrant_name: str | None = None
+    accession_number: str
+    report_date: str | None = None
+    filing_date: str | None = None
+    net_assets: float | None = None
+    total_assets: float | None = None
+    holding_count: int = 0
+    top_holdings: list[NPortHoldingOut] = []
+
+
 class EvidenceOut(BaseModel):
     evidence_id: str
     source: str
@@ -273,6 +300,7 @@ class EntityDetail(BaseModel):
     identifiers: list[EntityIdentifierOut] = []
     identifier_total: int = 0
     sec_13f: Sec13FActivityOut | None = None
+    nport: NPortFundReportOut | None = None
     parent_count: int = 0
     subsidiary_count: int = 0
     connections: EntityConnectionsOut = EntityConnectionsOut()

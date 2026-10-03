@@ -166,10 +166,17 @@ def run_all(cfg: AppConfig) -> dict[str, int]:
     )
     if not company_files:
         raise FileNotFoundError(f"no BasicCompanyData CSV found under {cfg.companies_house.raw_dir}")
+    # The snapshot ships as one persons-with-significant-control-snapshot-*.zip
+    # or as numbered psc-snapshot-*_NofM.zip parts.
     psc_files = sorted(
-        {*cfg.companies_house.raw_dir.glob("*psc*.txt*"),
-         *cfg.companies_house.raw_dir.glob("*psc*.zip")}
+        {
+            path
+            for pattern in ("*psc*.txt*", "*psc*.zip", "*persons-with-significant-control*")
+            for path in cfg.companies_house.raw_dir.glob(pattern)
+        }
     )
+    if not psc_files:
+        raise FileNotFoundError(f"no PSC snapshot found under {cfg.companies_house.raw_dir}")
     return {
         "companies": parse_companies(cfg, company_files[-1]),
         "psc": parse_psc(cfg, psc_files),

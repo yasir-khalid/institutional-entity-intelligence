@@ -55,6 +55,39 @@ class Sec13FActivity(BaseModel):
     scale_suspect_filings: list[str] = []
 
 
+class NPortHoldingSummary(BaseModel):
+    holding_id: str
+    issuer_name: str | None = None
+    issuer_lei: str | None = None
+    cusip: str | None = None
+    isin: str | None = None
+    asset_category: str | None = None
+    payoff_profile: str | None = None
+    value_usd: float | None = None
+    percentage: float | None = None
+
+
+class NPortFundReport(BaseModel):
+    """A registered fund's latest Form N-PORT report, keyed by its series LEI.
+    Unlike 13F it covers the whole portfolio - debt, derivatives, non-US and
+    short positions included - but it is filed monthly and made public with a
+    60-day lag, so it is a dated snapshot, never the current portfolio."""
+
+    series_lei: str
+    series_id: str | None = None
+    series_name: str | None = None
+    cik: str | None = None
+    registrant_name: str | None = None
+    registrant_lei: str | None = None
+    accession_number: str
+    report_date: str | None = None
+    filing_date: str | None = None
+    net_assets: float | None = None
+    total_assets: float | None = None
+    holding_count: int = 0
+    top_holdings: list[NPortHoldingSummary] = []
+
+
 class EntityLineage(BaseModel):
     """GLEIF's own identity timeline for this entity - when it was created,
     first registered, last updated, and next due for renewal, plus its
@@ -92,6 +125,7 @@ class EntityProfile(BaseModel):
     identifier_total: int = 0
     hierarchy: HierarchyResult | None = None
     sec_13f: Sec13FActivity | None = None
+    nport: NPortFundReport | None = None
 
 
 class LinkedRecord(BaseModel):

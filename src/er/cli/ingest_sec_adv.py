@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 
 from rich.console import Console
@@ -9,6 +10,10 @@ from er.datasources.sec_adv.ingest import run_all
 
 
 def main() -> None:
+    # pypdf warns about every malformed cross-reference and unparsed font in
+    # real-world brochures; extraction still succeeds, and failures are kept
+    # per document as extraction_error.
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
     console = Console()
     started = time.monotonic()
     with console.status("Ingesting Form ADV brochures..."):

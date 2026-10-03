@@ -429,6 +429,41 @@ function Holdings({ detail }: { detail: EntityDetail }) {
   );
 }
 
+function FundReport({ detail }: { detail: EntityDetail }) {
+  const report = detail.nport;
+  if (!report) return null;
+  const filing = report.cik
+    ? `https://www.sec.gov/Archives/edgar/data/${Number(report.cik)}/${report.accession_number.replaceAll("-", "")}/`
+    : null;
+  return (
+    <ProfileSection
+      title="Latest N-PORT report"
+      hint={`${report.holding_count.toLocaleString()} holdings · ${report.report_date ?? "—"}`}
+    >
+      <p className="profile-caveat">
+        The fund&apos;s whole portfolio as of the report date - debt, derivatives and non-US holdings included - made public
+        with a 60-day lag, so a dated snapshot rather than today&apos;s positions. Net assets{" "}
+        <strong>{report.net_assets === null ? "—" : formatUsd(Math.round(report.net_assets), "USD")}</strong>.
+        {filing && <> <a href={filing} target="_blank" rel="noreferrer">Filing on EDGAR <ExternalLink /></a></>}
+      </p>
+      <ul className="holding-rows">
+        {report.top_holdings.map((holding) => (
+          <li key={holding.holding_id}>
+            <button type="button" disabled>
+              <span className="profile-name">{holding.issuer_name ?? "Unnamed holding"}</span>
+              <code>{holding.cusip ?? holding.isin}</code>
+              <strong>
+                {holding.value_usd === null ? "—" : formatUsd(Math.round(holding.value_usd), "USD")}
+                {holding.percentage !== null && ` · ${holding.percentage.toFixed(2)}%`}
+              </strong>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </ProfileSection>
+  );
+}
+
 export default function EntityProfile({
   detail,
   loading,
@@ -475,6 +510,7 @@ export default function EntityProfile({
       <Resolution detail={detail} onOpenEntity={onOpenEntity} />
       <Connections detail={detail} onOpenEntity={onOpenEntity} />
       <Holdings detail={detail} />
+      <FundReport detail={detail} />
     </section>
   );
 }

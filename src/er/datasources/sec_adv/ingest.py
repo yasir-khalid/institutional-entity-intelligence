@@ -4,8 +4,10 @@ import csv
 import hashlib
 import io
 import zipfile
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO
 
 import duckdb
 from pypdf import PdfReader
@@ -26,16 +28,39 @@ def _iso_date(value: str) -> str:
     return value
 
 
-def parse_mapping(cfg: AppConfig, path: Path) -> int:
+def _is_mapping(name: str) -> bool:
+    return "mapping" in name.lower() and name.lower().endswith(".csv")
+
+
+def _mapping_streams(raw_dir: Path) -> Iterator[tuple[str, IO[str]]]:
+    """SEC ships each month's mapping (ADV_Brochure_Mapping_<from>_<to>.csv)
+    inside that month's brochure zip; a loose copy beside the zips works too."""
+    for path in sorted(raw_dir.iterdir()):
+        if _is_mapping(path.name):
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                yield path.name, stream
+        elif path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(path) as archive:
+                for member in archive.namelist():
+                    if _is_mapping(member):
+                        with archive.open(member) as raw:
+                            yield f"{path.name}:{member}", io.TextIOWrapper(raw, encoding="utf-8-sig", newline="")
+
+
+def parse_mappings(cfg: AppConfig) -> int:
     writer = BatchedParquetWriter(
         cfg.sec_adv.processed_dir / "sec_adv_brochures.parquet",
         BROCHURE_SCHEMA,
         cfg.sec_adv.batch_size,
     )
     ingested_at = datetime.now(timezone.utc).isoformat()
-    count = 0
-    with path.open(encoding="utf-8-sig", newline="") as stream:
+    seen: set[str] = set()
+    for source_file, stream in _mapping_streams(cfg.sec_adv.raw_dir):
         for raw in csv.DictReader(stream):
+            pdf_file_name = (raw.get("PDFFileName") or "").strip()
+            if pdf_file_name in seen:
+                continue
+            seen.add(pdf_file_name)
             date_filed = _iso_date((raw.get("DateFiled") or "").strip())
             row = SecAdvBrochure(
                 firm_name=(raw.get("FirmName") or "").strip(),
@@ -46,15 +71,14 @@ def parse_mapping(cfg: AppConfig, path: Path) -> int:
                 brochure_id=(raw.get("BrochureID") or "").strip(),
                 brochure_version=(raw.get("BrochureVersion") or "").strip(),
                 date_filed=date_filed,
-                pdf_file_name=(raw.get("PDFFileName") or "").strip(),
-                source_file=path.name,
+                pdf_file_name=pdf_file_name,
+                source_file=source_file,
                 snapshot_date=date_filed,
                 ingested_at=ingested_at,
             )
             writer.add(row.model_dump())
-            count += 1
     writer.close()
-    return count
+    return len(seen)
 
 
 def parse_documents(cfg: AppConfig, zip_paths: list[Path]) -> dict[str, int]:
@@ -132,9 +156,8 @@ def parse_documents(cfg: AppConfig, zip_paths: list[Path]) -> dict[str, int]:
 
 
 def run_all(cfg: AppConfig) -> dict[str, int]:
-    mappings = sorted(cfg.sec_adv.raw_dir.glob("*mapping*.csv"))
-    if not mappings:
-        raise FileNotFoundError(f"no *mapping*.csv found under {cfg.sec_adv.raw_dir}")
-    brochures = parse_mapping(cfg, mappings[-1])
+    brochures = parse_mappings(cfg)
+    if not brochures:
+        raise FileNotFoundError(f"no brochure mapping CSV found in or beside the zips under {cfg.sec_adv.raw_dir}")
     counts = parse_documents(cfg, sorted(cfg.sec_adv.raw_dir.glob("*.zip")))
     return {"brochures": brochures, **counts}
