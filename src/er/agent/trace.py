@@ -1,4 +1,4 @@
-"""Developer trace for one er.agent run: every model turn, every MCP tool
+"""Developer trace for one er.agent run: every LLM call, every MCP tool
 call, every rejected submission, and the verifier - with timings, token
 usage, arguments and payloads.
 
@@ -38,12 +38,13 @@ class TraceSpan(BaseModel):
     """One step of a run. `start_ms` is relative to the start of the run, so a
     consumer can lay spans out as a waterfall without clock arithmetic.
 
-    `parent_id` makes the run a tree: a tool call or submission points at the
-    model turn that requested it; model turns and the verifier have no parent
-    (they sit directly under the run)."""
+    A run is a flat sequence of spans under one agent run, in the order they
+    happened - one question is one turn, so the LLM calls inside it are steps,
+    not turns of their own. `requested_by` records which LLM call asked for a
+    tool call or submission; it is provenance, not nesting."""
 
     id: str
-    parent_id: str | None = None
+    requested_by: str | None = None
     kind: SpanKind
     name: str
     start_ms: int
@@ -74,7 +75,7 @@ def _forced_tool(tool_choice: dict[str, Any] | None) -> str | None:
 
 def llm_span(
     span_id: str,
-    turn: int,
+    iteration: int,
     requested_model: str,
     tool_choice: dict[str, Any] | None,
     start_ms: int,
@@ -91,8 +92,8 @@ def llm_span(
             start_ms=start_ms,
             duration_ms=duration_ms,
             status="error",
-            summary=f"Turn {turn} failed: {error}",
-            detail={"turn": turn, "forced_tool": forced, "error": error},
+            summary=f"LLM call failed: {error}",
+            detail={"iteration": iteration, "forced_tool": forced, "error": error},
         )
 
     response = response or {}
@@ -123,7 +124,7 @@ def llm_span(
         duration_ms=duration_ms,
         summary=summary,
         detail={
-            "turn": turn,
+            "iteration": iteration,
             "forced_tool": forced,
             "finish_reason": choice.get("finish_reason"),
             "provider": response.get("provider"),

@@ -110,14 +110,9 @@ def _render_sec_13f(console: Console, profile: EntityProfile) -> None:
     )
     table = Table(title="Latest SEC 13F reported holdings (top 10 by value)", width=_table_width(console))
     table.add_column("Issuer")
-    table.add_column("Value ($)", justify="right")
+    value_heading = "Value ($000s)" if sec.value_unit == "USD_THOUSANDS" else "Value ($)"
+    table.add_column(value_heading, justify="right")
     for h in sec.top_reported_holdings:
-        # SEC's 13F VALUE field has been reported in whole dollars since the 2023
-        # rule change (the older "thousands of dollars" convention no longer
-        # applies) - confirmed against raw data: price-per-share derived from
-        # VALUE/shares lines up with real historical share prices only when VALUE
-        # is treated as dollars, not thousands (e.g. $40.34/share for a real
-        # CoStar Group position, not $40,340/share).
         table.add_row(h.name_of_issuer, f"{h.value:,}" if h.value is not None else "-")
     console.print(table)
 

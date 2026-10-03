@@ -19,7 +19,16 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     cfg = load_config()
     counts = run_all(cfg)
-    logger.info("ingestion complete: %d filings, %d holdings", counts["filings"], counts["holdings"])
+    logger.info(
+        "ingestion complete: %d filings, %d holdings, %d validations, "
+        "%d other managers, %d effective holdings, %d filings flagged as reported in thousands",
+        counts["filings"],
+        counts["holdings"],
+        counts["validations"],
+        counts["other_managers"],
+        counts["effective_holdings"],
+        counts["scale_suspect_filings"],
+    )
 
 
 if __name__ == "__main__":

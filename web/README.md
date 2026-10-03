@@ -2,8 +2,8 @@
 
 A Next.js frontend over the Python entity-resolution engine, via a thin FastAPI
 backend (`src/er/api/app.py`, in the repo root). This app owns no
-entity-resolution logic itself - it only searches, renders a relationship
-tree, and shows a details panel for whatever node is clicked.
+entity-resolution logic itself - it searches, shows an entity profile, and
+streams agent answers with their evidence.
 
 ## Run it
 
@@ -17,92 +17,56 @@ cd web && npm run dev    # Next.js dev server (picks 3000, or the next free port
 Copy `.env.local.example` to `.env.local` first if `NEXT_PUBLIC_API_URL` needs
 to point somewhere other than `http://localhost:8000`.
 
-Requires the same live OpenSearch + processed Parquet data the CLIs need (see
-the root `README.md`'s Quickstart) - this UI is a view over the same data, not
-a separate pipeline.
+Requires live OpenSearch (see the root `README.md`'s Quickstart) - this UI is a
+view over the same serving data, not a separate pipeline. The optional Form ADV
+PDF endpoint also needs access to its locally mounted source ZIPs.
 
 ## How to use it
 
-1. The landing page is search-first, like a search engine homepage - a
-   centered search bar and a short "How it works" step flow, nothing else,
-   until you actually search. Type a query and pick what it is: **Name**,
-   **LEI**, or **Security ID (CUSIP)**.
-   The four steps below the search bar auto-play a miniature preview of each
-   stage (2.8s per step) and are explicitly labelled as auto-playing; the
-   steps themselves are not clickable, since there is nothing to switch to -
-   the preview is a demonstration, not a tab set.
-2. A single unambiguous result (or a confident `AUTO_MATCH`) jumps straight to
-   the relationship tree. Otherwise the results take the whole screen as an
-   aligned table - name, jurisdiction, LEI, decision - so ten near-identical
-   legal names can be compared one column at a time. Every row renders every
-   cell, including an empty decision cell, so one badged row never pushes its
-   neighbours' columns out of line. The raw retrieval score is
-   deliberately not shown: it is an unnormalised BM25 value that means nothing
-   to a reader, and the list is already ordered by it.
-3. Picking a result opens the workspace: the results collapse to a capped
-   strip at the top, and the tree and details panes appear side by side as two
-   cards with identical header bars. When the strip has more rows than fit, a
-   scroll control appears on its bottom edge and disappears once you reach the
-   end.
-4. The tree renders as a plain indented list - deliberately not a
-   node-and-edge graph - one full-width row per entity with a continuous
-   indent guide per level. An upward green arrow marks a parent/manager, a
-   downward violet arrow a fund/subsidiary, and a filled indigo dot the root.
-   Only the root's direct neighbours are expanded on first load; every row
-   with children has a chevron to expand or collapse just that branch. The
-   originally-searched entity carries a **QUERY** badge; the selected row is
-   filled indigo with a left accent bar.
-5. Click any row to load its full profile into the right-hand panel -
-   overview, GLEIF lineage timeline, identifiers (click one to expand its
-   provenance), and, when the entity resolves as a filer, its latest SEC 13F
-   reported holdings. Every loading state shows a skeleton that mirrors the
-   real layout's geometry rather than a blank screen or a spinner.
-6. The details panel header carries an **Ask** button that opens a chat
-   sidebar (`AskDrawer.tsx`) scoped to the selected entity, answered via
-   `src/er/agent` (a real MCP server the agent is wired to over the MCP
-   protocol, backed by an OpenRouter model) - a running conversation, not a
-   one-shot inline box. Each assistant reply carries inline `[1]` `[2]`
-   citation markers; clicking one switches the same drawer into its
-   **Sources & method** sub-view (a back arrow returns to the chat) showing the
-   exact record each claim is based on - source, evidence type, filter criteria,
-   record count, as-of date, and expandable record/field provenance. A collapsed
-   high-level lineage groups related evidence receipts by the deterministic
-   query that produced them; it is deliberately not a raw agent trace. There is no document corpus
-   behind this (the underlying lookups are OpenSearch/DuckDB, not RAG), so
-   each citation is a deterministic provenance record a tool call constructed
-   from the exact query it ran, never an LLM-asserted confidence score.
-   Requires `OPENROUTER_API_KEY` in the repo root's `.env` - without it, the
-   drawer still opens but shows a clear "agent is unavailable" error rather
-   than failing silently. Switching to a different entity while the drawer is
-   open starts a fresh conversation, since old citations would otherwise
-   point at evidence about an entity no longer in view.
+The page is one composer with two modes, **Search** and **Agent**, plus a few
+suggested queries until you run one.
 
-The landing page's composer also offers an **Agent** mode alongside Search.
-Agent answers stream from `POST /api/ask/stream` (SSE): while the model works,
-the UI shows a live **research feed** - one line per step, e.g. "Searching name
-for …", "Reading the full profile for …" - and drops it the moment the answer
-arrives. Answers are rendered as real Markdown (headings, bold, lists, GFM
-tables) rather than raw text, inline `[n]` markers stay clickable, and the
-**Sources & method** evidence rail sits top-right in its own column (pinned to the top
-of the conversation, like Perplexity's source panel) instead of below the
-answer; on narrow screens it stacks underneath. The non-streaming
-`POST /api/ask` endpoint is still used by the details-panel Ask drawer.
+**Search** resolves a name through the matcher and lists the candidates with
+their jurisdiction, LEI and decision (Resolved / Review / Candidate). The raw
+retrieval score is deliberately not shown: it is an unnormalised BM25 value
+and the list is already ordered by it. Opening a candidate loads its **entity
+profile** (`EntityProfile.tsx`) below the list:
 
-The landing page also carries a floating **Why this matters** button, which
-opens a focus-trapped drawer explaining what entity resolution, identifiers,
-hierarchy, lineage and provenance each buy you when an agent is consuming
-this data - with the measured before/after numbers from `experiments/` rather
-than assertions. The five topics and the title's accent rule animate in as a
-short staged sequence on open, restrained enough not to delay reading, and
-fall back to a static state under `prefers-reduced-motion`. Each topic also
-carries its own small illustration in the same visual grammar as the
-how-it-works preview - e.g. Entity resolution shows one brand name fanning
-into three jurisdictions, Identifiers contrasts an ambiguous name match
-against an exact LEI match - so the argument is shown, not just stated.
-Both preview systems are deliberately flat: hairline borders, no gradients
-or glow, one accent color used sparingly for the single relevant state
-rather than red/green traffic-light blocks - closer to how a real product
-screenshot reads than a decorative illustration card.
+- **Identifiers**, and the records in other sources linked to this LEI (a
+  13F CIK, an FFIEC RSSD, a Companies House number).
+- **How other records were linked**: each crosswalk decision with its score,
+  gap to the runner-up (clickable), per-feature points and matching config
+  fingerprint, plus its human reviews and a Confirm / Reject form
+  (`POST /api/reviews`). A review is stored as its own row, never an edit, and
+  changes the graph link on the next `make build-knowledge-graph`.
+- **Ownership & control** from the knowledge graph, one group per kind of
+  claim: Schedule 13D/G beneficial owners, FFIEC NIC bank control, Companies
+  House PSC, Forms 3/4/5 insiders and LEI successions. 13D/G and insider rows
+  link to the filing on EDGAR. A succeeded LEI shows a "Succeeded by" link.
+- **Latest reported 13F holdings**, with the coverage caveat and warnings for
+  quarantined filings or values that look like thousands. Opening a holding
+  loads its position across recent reports (`GET /api/positions/{cik}/{cusip}`).
+  Each total and change has a formula toggle that unfolds to the filed
+  information-table rows and their EDGAR filing.
+
+The GLEIF hierarchy shows as parent and child counts only. The indented tree
+(`EntityTreeView.tsx`, below) is kept but not mounted since the restyle.
+
+**Agent** streams from `POST /api/ask/stream` (SSE). While the model works the
+page shows a live research feed - one line per step, e.g. "Searching name
+for …" - and replaces it with the answer, rendered as Markdown with clickable
+`[n]` citations. The **Sources & method** rail lists every evidence record the
+answer cites: source, criteria, record count, as-of date, and the addressed
+values it supplied, with a link to the original filing when there is one. A
+calculated value shows its formula and inputs down to the filed rows. Each
+answer closes with Jev's verification badge. Follow-up questions keep the
+conversation. Requires `OPENROUTER_API_KEY` in the repo root's `.env`; without
+it the request fails with a clear error rather than silently.
+
+The **Developer** toggle in the header opens a trace of the last agent run:
+one span per model call, tool call, submission attempt and verifier pass, with
+arguments, payload previews, token usage and why a submission was rejected.
+Its open state survives reloads.
 
 ## Structure
 
@@ -117,26 +81,19 @@ src/
 │   ├── ui.tsx                 # shared primitives: SectionLabel, Badge, Mono,
 │   │                            Field/FieldGrid - the single source of truth
 │   │                            for type scale, badge colours and label style
-│   ├── SearchBar.tsx          # query input + Name/LEI/CUSIP segmented control
-│   ├── HowItWorks.tsx         # landing-page connected step flow
-│   ├── WhyItMatters.tsx       # floating trigger + explainer drawer: why an
-│   │                            entity layer matters for agent context
-│   ├── ResultsList.tsx        # ambiguous-search result picker (aligned columns)
-│   ├── EntityTreeView.tsx     # rebuilds the API tree into a proper spanning
-│   │                            tree, renders it as a plain indented list
-│   │                            with per-branch collapse state
-│   ├── LineageTimeline.tsx    # four-point GLEIF identity timeline
-│   ├── ScrollPane.tsx         # height-capped scroller + "more below" control
-│   ├── Skeletons.tsx          # loading placeholders that mirror real geometry
-│   ├── DetailsPanel.tsx       # renders EntityDetail JSON; header "Ask" button
-│   │                            opens AskDrawer
-│   ├── AskDrawer.tsx          # chat sidebar for the selected entity - answers
-│   │                            with inline [n] citations; a marker click
-│   │                            switches the same drawer to its evidence view
-│   └── EvidenceLayer.tsx      # evidence card list, shown in AskDrawer's
-│                                evidence view and page.tsx's right-hand rail
-│   └── Markdown.tsx           # renders agent answers as Markdown (GFM) and
-│                                turns inline [n] markers into citation links
+│   ├── SearchBar.tsx          # query composer + Search/Agent mode switch
+│   ├── EntityProfile.tsx      # the entity profile: identifiers, link
+│   │                            decisions + reviews, ownership & control,
+│   │                            13F holdings with position history
+│   ├── FactValues.tsx         # addressed values, formulas and their inputs
+│   ├── EvidenceLayer.tsx      # the Sources & method evidence rail
+│   ├── CitationChip.tsx       # inline [n] citation marker
+│   ├── Markdown.tsx           # renders agent answers as Markdown (GFM) and
+│   │                            turns inline [n] markers into citation links
+│   ├── VerificationBadge.tsx  # Jev's verdict and per-check meters
+│   ├── DeveloperPanel.tsx     # trace tree of the last agent run
+│   └── EntityTreeView.tsx     # spanning-tree GLEIF hierarchy as an indented
+│                                list - not mounted since the restyle
 └── lib/api.ts                 # typed fetch client - mirrors src/er/api/schemas.py exactly
 ```
 

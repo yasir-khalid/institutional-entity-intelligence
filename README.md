@@ -1,13 +1,15 @@
 # Institutional Entity Intelligence
 
 Entity-resolution platform anchored on GLEIF LEI data, extended with SEC filing
-data (13F institutional holdings), built as a research substrate for
+data (13F and N-PORT holdings, Schedule 13D/G beneficial ownership, fund
+registrations, company metadata, and insider transactions), US bank hierarchies
+from the FFIEC NIC, and UK Companies House/PSC data, built as a research substrate for
 agentic-AI/entity-resolution work. Given a messy, real-world name for a fund or
 manager, it identifies the correct legal entity, explains why, and links it to
 other identifier systems and its institutional hierarchy.
 
-OpenSearch is used only for candidate retrieval, never as the system of record —
-canonical data always lives in Parquet.
+Parquet is the rebuildable build-time system of record. OpenSearch holds the
+serving projections used by deployed API, CLI, and agent reads.
 
 ## How it works
 
@@ -16,15 +18,15 @@ flowchart TB
     subgraph sources["Data sources (each owns its own ETL)"]
         GLEIF["GLEIF LEI data\n(3.4M entities)"]
         SEC13F["SEC Form 13F\n(institutional filings)"]
-        FUTURE["... next source\n(FCA, Companies House, Form ADV)"]
+        SECREF["SEC reference data\n(submissions, funds, insiders)"]
     end
 
     GLEIF --> ingest["Ingest\n(streaming parse -> Parquet)"]
     SEC13F --> ingest
-    FUTURE -.-> ingest
+    SECREF --> ingest
 
     ingest --> parquet[("Parquet\nsystem of record")]
-    parquet --> index["OpenSearch index\n(candidate retrieval only)"]
+    parquet --> index["OpenSearch indexes\n(candidate retrieval + serving projections)"]
 
     query["Messy query name"] --> retrieve
     index --> retrieve["Retrieve\ncandidate pool"]
@@ -41,6 +43,20 @@ flowchart TB
     canonical --> hierarchy["er.hierarchy / er.family\nGLEIF relationships"]
 ```
 
+The answer path is deliberately narrower:
+
+```mermaid
+flowchart LR
+    S[Original sources] --> V[Validate and quarantine]
+    V --> F[(Addressed facts)]
+    F --> T[Typed retrieval tools]
+    T --> C[Answer with fact placeholders]
+    C --> R{Re-read cited addresses}
+    R -->|match| A[Render answer and citations]
+    R -->|changed or missing| X[Reject submission]
+    A --> P[Open original PDF or record]
+```
+
 Every decision carries an evidence trail (which features fired, retrieval score
 vs. match score, why a REVIEW/UNMATCHED wasn't confident enough) — never a silent
 black box. See [`docs/architecture.md`](docs/architecture.md) for the full
@@ -52,6 +68,37 @@ under `src/er/datasources/<source>/`, a crosswalk resolving its records to a
 GLEIF LEI via the existing `er.matching.matcher.match()`, and one SQL-returning
 function in `src/er/entity/sources.py` pointing at your crosswalk's output. See
 [`AGENTS.md`](AGENTS.md) for the exact steps.
+
+## Data sources
+
+GLEIF is the spine: every profile is an LEI, and every other source either
+carries an identifier that lands on one directly, or reaches one through the
+13F crosswalk's CIK → LEI decisions. Each source answers a different question,
+and the graph keeps them as separate edge types: GLEIF accounting
+consolidation, bank control, beneficial ownership and significant control are
+never folded into one "parent".
+
+| Source | What it is | What it adds | Reaches an LEI via | Loaded now |
+|---|---|---|---|---|
+| **GLEIF LEI** (`gleif`) | Global legal-entity register: Level 1 entities, Level 2 relationships and reporting exceptions | The entity universe and names matching runs against; accounting parent / ultimate parent, fund-manager, sub-fund, branch and successor edges; exceptions that say *why* a parent is missing | is the LEI | 3.4M entities, 669k relationships, 6.2M exceptions |
+| GLEIF ISIN ↔ LEI (`gleif`) | GLEIF's issuer mapping file | ISIN identifiers on issuers; the positive pairs the benchmark is generated from | LEI in the file | 9.3M ISINs |
+| GLEIF BIC / MIC / OpenCorporates mappings (`gleif`) | Registration-authority crosswalk files | SWIFT, market and company-register identifiers on an LEI | LEI in the file | not loaded |
+| **SEC Form 13F** (`sec_13f`) | Quarterly long US-equity holdings of managers with $100M+ discretion | Who a manager is (filer CIK, name, address), latest reported holdings, position history by CUSIP; filings that don't reconcile go to quarantine | the only crosswalk: matcher resolves each filer CIK (AUTO_MATCH / REVIEW / UNMATCHED, human reviews on top) | 11.8k filings, 3.8M rows, 10.7k filers → 3,247 auto-matched, 853 for review |
+| **SEC Schedule 13D/G** (`sec_13dg`) | Disclosures by anyone crossing 5% of a listed company's voting class | Beneficial-owner edges with percent of class, voting/dispositive power and event date; issuer ↔ CUSIP links | issuer and reporting-person CIKs, through the crosswalk | 21.7k ownership rows (structured XML, Dec 2024 onward) |
+| **SEC insider filings** (`sec_insiders`) | Forms 3/4/5 by officers, directors and 10% owners | Insider-of edges (role, title) and their transactions | issuer CIK, through the crosswalk | 60k relationships, 128k transactions |
+| **SEC series & class** (`sec_series_class`) | Registered investment-company register | Registrant → fund series → share class structure, with series and class IDs and tickers | registrant CIK, through the crosswalk | 43k classes, 19k series |
+| SEC submissions (`sec_submissions`) | EDGAR company metadata for every CIK | Canonical CIK names, former names, addresses, SIC, tickers - better matching inputs for every CIK-keyed source | CIK | not loaded |
+| SEC N-PORT (`nport`) | Registered funds' portfolio reports (filed monthly, published quarterly) | Fund-level holdings beyond 13F (debt, derivatives, non-US); registrant and series LEIs the filings state themselves | LEIs reported in the filing | not loaded |
+| OpenFIGI (`openfigi`) | Bloomberg's open security-identifier mapping | FIGIs, tickers and security types for 13F CUSIPs, so a security is an entity of its own, never an identifier of its issuer | CUSIP → security node | not loaded |
+| SEC Form ADV (`sec_adv`) | Adviser registrations and brochure PDFs | Full-text, page-cited brochure search for the agent and the PDF viewer | CRD / SEC number | not loaded (indexes exist, empty) |
+| Companies House + PSC (`companies_house`) | UK company register and persons with significant control | UK company numbers and status; significant-control edges with their nature of control (e.g. 25-50% of shares) | company number = GLEIF registration ID | not loaded |
+| FFIEC NIC (`ffiec_nic`) | Federal Reserve register of US banks and holding companies | RSSD IDs; bank-control edges with percent ownership; mergers as successor edges | LEI the NIC record carries | not loaded |
+
+Two consequences worth knowing. 13D/G, insider and fund-structure records
+only appear on a profile when their CIK has been auto-matched (or reviewed) to
+an LEI, so the crosswalk's coverage caps how much of them you see. And 13F is
+"latest reported holdings", never a whole portfolio: it excludes shorts,
+derivatives, non-US securities, private investments and sub-threshold positions.
 
 ## Quickstart
 
@@ -66,14 +113,50 @@ cp .env.example .env     # fill in OPENSEARCH_URL (OPENROUTER_API_KEY only neede
 **Data pipeline** (once, or after refreshing raw source files):
 
 ```bash
-make pipeline        # ingest all sources -> index -> validate -> benchmark
+make pipeline        # ingest the core GLEIF + 13F sources, then index/validate/benchmark
 # or step by step:
 make ingest-gleif     # GLEIF XML/CSV -> data/processed/*.parquet (~10-15 min)
 make ingest-sec-13f   # SEC 13F bulk TSVs -> data/processed/*.parquet (~1 min)
+make ingest-sec-series-class
+make ingest-sec-submissions   # large SEC bulk download (~1.5 GB)
+make ingest-sec-insiders
+make ingest-sec-adv          # expects brochure mapping CSV/PDF zips in data/raw/sec_adv
+make ingest-companies-house  # expects company CSV and PSC JSON snapshots
+make ingest-nport             # expects a quarterly *nport.zip in data/raw/nport
+make ingest-openfigi          # enriches 13F CUSIPs; OPENFIGI_API_KEY is optional
+make ingest-sec-13dg          # structured Schedule 13D/G from EDGAR (~40 min a quarter;
+                              # --quarter 2026Q1 / --limit N via python -m er.cli.ingest_sec_13dg)
+make ingest-ffiec-nic         # expects the NIC CSV zips in data/raw/ffiec_nic (FFIEC blocks scripted downloads)
+make build-knowledge-graph    # typed legal-entity/fund/class/security/owner graph
 make index            # entities -> OpenSearch (~20 min)
 make validate         # sanity-check the processed tables
 make benchmark        # data/benchmark/*.parquet (~1 sec, DuckDB)
+make publish          # Parquet -> OpenSearch serving indexes the API reads (~10 min)
 ```
+
+**Where data lives.** Parquet in `data/processed` is the build store: every
+ingest, crosswalk and graph build writes it. The API, agent tools and CLIs
+read only OpenSearch: the `gleif_entities_v1` search index for name matching,
+plus the serving indexes `make publish` builds. Each serving index sits behind
+an alias and is swapped in only when fully loaded.
+
+| Alias | One document per | Used for |
+|---|---|---|
+| `er_entities` | LEI: identity, lineage, identifiers (≤200 per type), GLEIF exceptions, match decisions, cross-source connections | profiles, LEI search, hierarchy names |
+| `er_gleif_relationships` | GLEIF relationship | hierarchy traversal, family confirmation |
+| `er_13f_filers` | 13F filer (CIK): latest-period summary, top holdings, quarantine and scale flags, LEI link | 13F activity, CUSIP search |
+| `er_13f_holdings` | effective information-table row | position history, CUSIP search |
+| `er_13dg_ownership` | 13D/G reporting person per filing | beneficial owners |
+| `er_sec_adv_pages` | extracted Form ADV PDF page | brochure full-text search |
+| `er_sec_adv_documents` | Form ADV PDF metadata + local archive member | resolve a locally mounted PDF |
+| `er_match_reviews` | human review, written by the API | reviews (`make pull-reviews` copies them back for `build-knowledge-graph`) |
+
+So a deployed API needs `OPENSEARCH_URL` (and `OPENROUTER_API_KEY` for the
+agent), not the Parquet files. Rebuild order after new data: ingest →
+crosswalk → `make pull-reviews` → `make build-entities` →
+`make build-knowledge-graph` → `make publish`. Form ADV search reads its page
+content and metadata from OpenSearch; PDF bytes remain in the local source ZIPs,
+so only the PDF-delivery endpoint needs that filesystem mount.
 
 **Day-to-day usage:**
 
@@ -98,14 +181,32 @@ uv run python -m er.cli.family --name "Point72"
 make crosswalk-sec-13f
 make build-entities
 
-# Ask a question about an entity - a real MCP server (search_entity,
-# get_entity_profile, get_relationship_hierarchy) wired to an OpenRouter model,
-# answering with citations to deterministic Evidence records, not a document
-# corpus. Every answer is then checked against its own tool results and closes
+# Ask a question through the MCP tools (search_entity, get_entity_profile,
+# get_relationship_hierarchy, search_adv_documents, get_position_history,
+# get_beneficial_owners). Numeric claims use retrieval-time fact IDs; the
+# submission gate re-reads their source addresses before rendering them.
+# Derived numbers (a position's change between 13F reports) come from
+# registered formulas in er.knowledge.formulas, and the evidence card shows the
+# formula and its inputs. Form ADV citations open the original PDF page. Every
+# answer is then checked against its own tool results and closes
 # with a verified / partially verified / not verified badge (see below).
 # Requires OPENROUTER_API_KEY in .env.
 uv run python -m er.cli.ask --entity-id 254900ESP1ZKG7UNS007 --question "What is its registration status?"
 ```
+
+**Reviewing match decisions.** Every crosswalk decision is kept with its
+score, runner-up, per-feature contributions and matching config fingerprint,
+and `make build-knowledge-graph` turns those into citable facts. To overrule
+one, add a row to `data/reviews/match_reviews.csv`:
+
+```csv
+node_id,lei,outcome,reviewer,reviewed_at,rationale
+cik:0001234567,5493001KJTIIGC8Y1R12,REJECTED,ana,2026-10-03,different fund series
+```
+
+`CONFIRMED` adds the link and `REJECTED` removes the automated one. The
+reviewer's latest outcome for a pair wins. The automated decision is never
+edited, so both stay in the facts table.
 
 Every CLI lives under `er.cli` (`python -m er.cli.<name>`) - a deliberate
 separation from the core ETL/entity-resolution packages, which never import
@@ -134,10 +235,14 @@ measurement caught, are in
 [`experiments/006-jev-answer-verification.md`](experiments/006-jev-answer-verification.md).
 
 **Web UI**: a Next.js frontend (`web/`) over a thin FastAPI backend
-(`src/er/api/`) - search by name/LEI/CUSIP, browse a depth-2 relationship tree,
-click any node for its full profile, and ask it a question ("Ask" section in
-the details panel) with citations resolved through an "Evidence layer" panel
-instead of raw traces. Same core logic, a different view:
+(`src/er/api/`). Search for an entity and open its profile: identifiers and
+linked records, how each linked record was matched (score, runner-up,
+per-feature points) with a Confirm / Reject review form, ownership and control
+(13D/G, FFIEC NIC, PSC, insiders, successors), and latest reported 13F
+holdings with a per-holding position history whose formulas unfold to the
+filed rows. Agent mode answers with citations, and each source card lists the
+exact values it supplied and where they came from. See `web/README.md`. Same
+core logic, a different view:
 
 ```bash
 make api                 # FastAPI backend on :8000
@@ -145,19 +250,22 @@ cd web && npm run dev    # Next.js dev server
 ```
 
 **Developer view**: the **Developer** button in the header docks a trace of
-the last agent run on the right, as a tree - the run at the root, each model
-turn under it, and under each turn the MCP tool calls (and the
-`submit_answer` gate) that turn requested, then the Jev verification. Select
-a node and its span opens beside the tree: for a model turn, the forced tool
-choice, finish reason, provider, OpenRouter generation id, tokens and cost;
-for a tool call, its arguments, evidence and result payload; for the gate, a
-rejection and why; for the verifier, its raw readings. The root shows the
-whole run as a timeline. Spans stream in live as the run happens, and a failed
-run opens on the span that failed. A run that crashes
-still leaves every step up to the one that killed it. Payload previews are
-capped at 20k chars; a larger result (a deep relationship tree is ~1.2M)
-arrives shape-preserved with long lists trimmed and each elision marked, and
-the panel shows its true size. Traces come from `er.agent.trace` and are
+the last agent run on the right, laid out like Arize Phoenix / Langfuse: one
+agent span at the root and, under it, every step in the order it happened -
+LLM calls, MCP tool calls, the `submit_answer` guardrail and the Jev
+evaluator. They are sibling steps, not turns: one question is one turn. Each
+span kind has its own icon and tint. Select a span and its latency, tokens,
+cost and input/output open beside the tree, payloads as a collapsible
+key/value tree: for an LLM call, the tool calls it requested, forced tool
+choice, finish reason, provider and OpenRouter generation id; for a tool
+call, its arguments, result and evidence, plus which LLM call requested it;
+for the guardrail, a rejection and why; for the evaluator, each check's
+reading against its threshold. The root shows the whole run as a timeline.
+Spans stream in live as the run happens, and a failed run opens on the span
+that failed. A run that crashes still leaves every step up to the one that
+killed it. Payload previews are capped at 20k chars; a larger result (a deep
+relationship tree is ~1.2M) arrives shape-preserved with long lists trimmed
+and each elision marked, and the panel shows its true size. Traces come from `er.agent.trace` and are
 opt-in on the API (`"trace": true` on `/api/ask/stream`); the web client
 always asks for one so the panel can be opened *after* an answer looks wrong.
 
@@ -179,7 +287,15 @@ soft|strict`.
 make test               # unit tests, no live services, ~5s
 make evaluate            # scores the matcher against the full benchmark (~7 min,
                          # needs live OpenSearch) -> evaluation_report.json
+make evaluate-agent      # runs config/agent_eval_cases.yaml through the live agent
+                         # -> data/evaluation/agent-eval.xml (JUnit), needs OPENROUTER_API_KEY
 ```
+
+`make evaluate-agent` is the deterministic half of a double-entry check on
+answers: did the answer submit, does every citation resolve, is every fact it
+used cited, did it use the facts the case expects, and (with `--baseline`)
+have any of those values moved since an earlier `--save`. Jev's verdict is
+reported next to it, and cases where the two disagree are flagged.
 
 `make test` covers every pure function (normalization, matcher features/scoring/
 decisions, query construction, benchmark generation, graph traversal, brand-core
@@ -199,19 +315,22 @@ src/er/
 ├── matching/               # features -> score -> decision (er.cli.match)
 ├── family/                 # brand/family discovery logic (er.cli.family)
 ├── graph/                  # relationship hierarchy logic (er.cli.hierarchy)
+├── knowledge/              # typed cross-source nodes, edges, identifiers, facts
 ├── crosswalk/              # resolve another source's records to a GLEIF LEI
 ├── entity/                 # canonical entity layer: one entity, identifiers
 │                             from every source (er.cli.entity) - see sources.py
 │                             to add a new source's identifiers with one function
 ├── agent/                  # entity Q&A: a standalone MCP server (search_entity,
-│                             get_entity_profile, get_relationship_hierarchy)
+│                             get_entity_profile, get_relationship_hierarchy,
+│                             position history, 13D/G owners, ADV brochures)
 │                             plus an OpenRouter tool-calling orchestrator that
 │                             is genuinely wired to it over the MCP protocol
 │                             (er.cli.mcp_server, er.cli.ask) - every tool
 │                             returns deterministic Evidence, not RAG chunks,
 │                             and verifier.py checks the finished answer
 │                             against those tool results with a decision model
-├── evaluation/             # benchmark scoring + failure-analysis metrics
+├── evaluation/             # benchmark scoring + failure-analysis metrics, and
+│                             hard-path checks on agent answers (agent_eval.py)
 └── benchmark/              # auto-generated evaluation pairs
 
 experiments/   # proof-backed retrieval/scoring experiments (VALIDATED/INVALIDATED)

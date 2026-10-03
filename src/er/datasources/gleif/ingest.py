@@ -39,6 +39,7 @@ from er.datasources.gleif.fields import (
     extract_status_fields,
 )
 from er.datasources.gleif.isin_lei import parse_isin_lei
+from er.datasources.gleif.mappings import parse_mappings
 from er.datasources.gleif.models import GleifEntity, GleifRelationship, GleifRelationshipException
 from er.datasources.gleif.schema import (
     ENTITY_SCHEMA,
@@ -277,4 +278,5 @@ def run_all(cfg: AppConfig) -> dict[str, int]:
         "relationships": parse_relationships(cfg),
         "relationship_exceptions": parse_relationship_exceptions(cfg),
         "isin_lei": parse_isin_lei(cfg),
+        "external_identifiers": parse_mappings(cfg),
     }

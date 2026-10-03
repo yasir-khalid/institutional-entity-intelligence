@@ -1,7 +1,7 @@
 "use client";
 
 import type { Evidence } from "@/lib/api";
-import { getEvidencePresentation } from "@/components/EvidenceLayer";
+import { CoverageDot, CoverageNote, getEvidencePresentation } from "@/components/EvidenceLayer";
 
 /* ---------------------------------------------------------------------------
    An inline [n] citation marker in an agent answer. Hovering (or keyboard
@@ -40,21 +40,19 @@ export default function CitationChip({
       {evidence && (
         <span className="citation-pop" role="tooltip">
           <span className="citation-pop-head">
-            <span className="source-dot" />
+            <CoverageDot partial={evidence.warnings.length > 0} />
             <span className="citation-pop-source">{evidence.source}</span>
           </span>
-          {presentation && <span className={`citation-pop-kind is-${evidence.fact_type}`}>{presentation.label}</span>}
           {evidence.criteria[0] && <span className="citation-pop-title">{evidence.criteria[0]}</span>}
           {evidence.criteria.length > 1 && (
             <span className="citation-pop-body">{evidence.criteria.slice(1).join(" · ")}</span>
           )}
           <span className="citation-pop-meta">
+            {presentation ? `${presentation.label} · ` : ""}
             {evidence.result_count ?? "—"} record{evidence.result_count === 1 ? "" : "s"}
             {evidence.source_timestamp ? ` · as of ${evidence.source_timestamp}` : ""}
           </span>
-          {evidence.warnings.length > 0 && (
-            <span className="citation-pop-warning">{evidence.warnings.join(" ")}</span>
-          )}
+          <CoverageNote warnings={evidence.warnings} />
           {onOpen && (
             <button
               type="button"

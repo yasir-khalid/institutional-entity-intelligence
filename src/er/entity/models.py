@@ -31,6 +31,7 @@ class EntityIdentifier(BaseModel):
 class Sec13FHoldingSummary(BaseModel):
     name_of_issuer: str
     value: int | None = None
+    cusip: str | None = None
 
 
 class Sec13FActivity(BaseModel):
@@ -44,7 +45,14 @@ class Sec13FActivity(BaseModel):
     latest_period_of_report: str | None = None
     latest_filing_date: str | None = None
     reported_security_count: int = 0
+    value_unit: str = "USD"
     top_reported_holdings: list[Sec13FHoldingSummary] = []
+    # Filings from this filer that failed summary-page reconciliation and were
+    # kept out of the holdings ("accession: ERROR, ERROR").
+    quarantined_filings: list[str] = []
+    # Filings behind the latest period whose implied prices look like
+    # thousands (er.datasources.sec_13f.ingest.check_value_scale).
+    scale_suspect_filings: list[str] = []
 
 
 class EntityLineage(BaseModel):
@@ -79,5 +87,76 @@ class EntityProfile(BaseModel):
     entity_status: str | None = None
     lineage: EntityLineage | None = None
     identifiers: list[EntityIdentifier] = []
+    # All identifiers attached, of which `identifiers` holds up to 200 per type
+    # (one issuer carries 650k+ ISINs).
+    identifier_total: int = 0
     hierarchy: HierarchyResult | None = None
     sec_13f: Sec13FActivity | None = None
+
+
+class LinkedRecord(BaseModel):
+    """A record in another source asserted to be this same entity (an SEC CIK,
+    an RSSD ID, a Companies House number), and which source asserted it."""
+
+    node_id: str
+    display_name: str | None = None
+    source: str
+
+
+class Connection(BaseModel):
+    """One typed edge from the knowledge graph. `direction` is from this
+    entity's side: "outgoing" means this entity is the edge's subject (it is
+    the beneficial owner, the subsidiary, the predecessor)."""
+
+    edge_type: str
+    direction: str
+    other_node_id: str
+    other_name: str | None = None
+    other_type: str | None = None
+    source: str
+    valid_from: str | None = None
+    valid_to: str | None = None
+    percent: float | None = None
+    source_url: str | None = None
+
+
+class ConnectionGroup(BaseModel):
+    edge_type: str
+    direction: str
+    total: int
+    connections: list[Connection]
+
+
+class EntityConnections(BaseModel):
+    linked_records: list[LinkedRecord] = []
+    groups: list[ConnectionGroup] = []
+
+
+class MatchReview(BaseModel):
+    node_id: str
+    lei: str
+    outcome: str
+    reviewer: str
+    reviewed_at: str
+    rationale: str | None = None
+
+
+class MatchDecisionRecord(BaseModel):
+    """The crosswalk's stored decision linking a source record to an LEI, with
+    everything needed to check it: score, gap, runner-up, each feature's
+    points, and the config that produced it. Reviews are separate records."""
+
+    node_id: str
+    source_name: str | None = None
+    lei: str | None = None
+    decision: str
+    score: float | None = None
+    gap: float | None = None
+    reason: str | None = None
+    runner_up_lei: str | None = None
+    runner_up_name: str | None = None
+    runner_up_score: float | None = None
+    feature_contributions: dict[str, float] = {}
+    config_hash: str | None = None
+    decided_on: str | None = None
+    reviews: list[MatchReview] = []

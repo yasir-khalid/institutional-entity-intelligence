@@ -43,3 +43,5 @@ Kept or reverted, and why. If INVALIDATED, what to try instead (if anything come
 | [003](003-fix-master-feeder-conflict-false-positive.md) | Fix master/feeder conflict false-positive on ambiguous queries | VALIDATED | Confusable-pair dangerous-failure rate |
 | [004](004-benchmark-collision-artifact-not-a-matcher-bug.md) | "0% precision on fund_number pairs" was a benchmark labeling artifact | VALIDATED (benchmark fix) | Confusable-pair dangerous-failure rate |
 | [005](005-fund-structure-ambiguity-guard.md) | Refuse AUTO_MATCH when query is master/feeder-silent and top-2 disagree | VALIDATED | Confusable-pair dangerous-failure rate |
+| [006](006-jev-answer-verification.md) | Verify every agent answer against its own tool results with a decision model | VALIDATED | Agent answer faithfulness |
+| [007](007-13f-value-scale-check.md) | Flag 13F filings that still report values in thousands | VALIDATED | 13F value scale |

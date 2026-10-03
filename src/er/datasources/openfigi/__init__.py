@@ -1,0 +1,1 @@
+"""OpenFIGI security identifier mappings."""

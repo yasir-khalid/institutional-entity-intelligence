@@ -84,10 +84,29 @@ def sec_13f_identifiers_sql(cfg: AppConfig) -> str | None:
     """
 
 
+def gleif_external_identifiers_sql(cfg: AppConfig) -> str | None:
+    path = cfg.gleif.processed_dir / "gleif_external_identifiers.parquet"
+    if not path.exists():
+        return None
+    return f"""
+        SELECT
+            lei AS entity_id,
+            identifier_type,
+            identifier_value,
+            'SOURCE' AS confidence,
+            'gleif_mapping' AS source,
+            source_file,
+            snapshot_date,
+            ingested_at
+        FROM read_parquet('{path}')
+    """
+
+
 # Every source contributing identifiers to the canonical entity layer, in the
 # order their queries are unioned. Add a new source by writing one function
 # above and appending it here.
 IDENTIFIER_SOURCES = [
     isin_identifiers_sql,
+    gleif_external_identifiers_sql,
     sec_13f_identifiers_sql,
 ]

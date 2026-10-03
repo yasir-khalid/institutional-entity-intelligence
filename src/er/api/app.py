@@ -18,9 +18,9 @@ import json
 import logging
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from mcp import Client
 
 from er.agent.models import AskResult as AgentAskResult
@@ -30,22 +30,34 @@ from er.api.schemas import (
     AskRequest,
     AskResponse,
     CitationOut,
+    EntityConnectionsOut,
     EntityDetail,
     EntityIdentifierOut,
     EntityLineageOut,
+    DerivationOut,
     EvidenceOut,
+    FactOut,
+    MatchDecisionOut,
+    MatchReviewOut,
+    ReviewRequest,
     Sec13FActivityOut,
     Sec13FHoldingOut,
     SearchResponse,
     SearchResult,
+    ToolResultOut,
     TreeNode,
     VerificationOut,
 )
 from er.config import AppConfig, load_config
+from er.datasources.sec_adv.search import load_document
+from er.agent.tools import get_position_history
+from er.entity.connections import load_connections
 from er.entity.profile import get_entity_profile
+from er.entity.resolution import load_match_decisions, record_review
 from er.entity.search import match_result_to_matches, search_by_cusip, search_by_lei, search_by_name
 from er.graph.build import build_hierarchy_tree
 from er.graph.models import HierarchyNode
+from er.serving.store import MissingIndexError, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -89,15 +101,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+@app.exception_handler(MissingIndexError)
+async def missing_index(_: Request, exc: MissingIndexError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
 SEARCH_TYPES = ("name", "lei", "cusip")
 
 
 def _search_by_lei(cfg: AppConfig, lei: str) -> list[SearchResult]:
-    return [SearchResult(**m.model_dump()) for m in search_by_lei(cfg, lei)]
+    return [SearchResult(**m.model_dump()) for m in search_by_lei(get_store(cfg), lei)]
 
 
 def _search_by_cusip(cfg: AppConfig, cusip: str) -> list[SearchResult]:
-    return [SearchResult(**m.model_dump()) for m in search_by_cusip(cfg, cusip)]
+    return [SearchResult(**m.model_dump()) for m in search_by_cusip(get_store(cfg), cusip)]
 
 
 def _search_by_name(cfg: AppConfig, name: str, country: str | None) -> list[SearchResult]:
@@ -167,7 +186,7 @@ def entity_tree(
     if direction not in ("parents", "children", "all"):
         raise HTTPException(400, "direction must be one of parents, children, all")
     root = build_hierarchy_tree(
-        _cfg(),
+        get_store(_cfg()),
         entity_id,
         depth=depth,
         direction=direction,
@@ -179,7 +198,8 @@ def entity_tree(
 
 @app.get("/api/entity/{entity_id}", response_model=EntityDetail)
 def entity_detail(entity_id: str) -> EntityDetail:
-    profile = get_entity_profile(_cfg(), entity_id)
+    store = get_store(_cfg())
+    profile = get_entity_profile(store, entity_id)
     if profile is None:
         raise HTTPException(404, f"no canonical entity found for {entity_id}")
 
@@ -221,16 +241,54 @@ def entity_detail(entity_id: str) -> EntityDetail:
                 latest_period_of_report=sec.latest_period_of_report,
                 latest_filing_date=sec.latest_filing_date,
                 reported_security_count=sec.reported_security_count,
+                value_unit=sec.value_unit,
                 top_reported_holdings=[
-                    Sec13FHoldingOut(name_of_issuer=h.name_of_issuer, value=h.value)
+                    Sec13FHoldingOut(name_of_issuer=h.name_of_issuer, value=h.value, cusip=h.cusip)
                     for h in sec.top_reported_holdings
                 ],
+                quarantined_filings=sec.quarantined_filings,
+                scale_suspect_filings=sec.scale_suspect_filings,
             )
             if sec
             else None
         ),
         parent_count=len(profile.hierarchy.upward) if profile.hierarchy else 0,
         subsidiary_count=len(profile.hierarchy.downward) if profile.hierarchy else 0,
+        identifier_total=profile.identifier_total,
+        connections=EntityConnectionsOut(**load_connections(store, entity_id).model_dump()),
+        match_decisions=[MatchDecisionOut(**d.model_dump()) for d in load_match_decisions(store, entity_id)],
+    )
+
+
+@app.get("/api/positions/{cik}/{cusip}", response_model=ToolResultOut)
+def position_history(cik: str, cusip: str, periods: int = Query(4, ge=2, le=8)) -> ToolResultOut:
+    """The same deterministic result the agent's get_position_history tool
+    returns: period totals and changes as derived facts, each with its formula
+    and input rows."""
+    result = get_position_history(get_store(_cfg()), cik, cusip, periods=periods)
+    return ToolResultOut(**result.model_dump())
+
+
+@app.post("/api/reviews", response_model=MatchReviewOut)
+def add_review(body: ReviewRequest) -> MatchReviewOut:
+    """Appends a human review of a match. It takes effect in the graph on the
+    next `make build-knowledge-graph`; the entity view shows it immediately."""
+    try:
+        review = record_review(get_store(_cfg()), body.node_id, body.lei, body.outcome, body.reviewer, body.rationale)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return MatchReviewOut(**review.model_dump())
+
+
+@app.get("/api/sources/sec-adv/{pdf_file_name}")
+def sec_adv_document(pdf_file_name: str) -> Response:
+    content = load_document(_cfg(), get_store(_cfg()), pdf_file_name)
+    if content is None:
+        raise HTTPException(404, "SEC Form ADV brochure not found")
+    return Response(
+        content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{pdf_file_name}"'},
     )
 
 
@@ -253,13 +311,17 @@ async def ask_question(body: AskRequest) -> AskResponse:
     if client is None:
         raise HTTPException(503, "The entity-intelligence agent is unavailable (its MCP server failed to start).")
     try:
-        result = await agent_ask(client, _cfg(), body.question, body.entity_id)
+        result = await agent_ask(
+            client, _cfg(), body.question, body.entity_id, history=[turn.model_dump() for turn in body.history]
+        )
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
     return AskResponse(
         answer=result.answer,
         citations=[CitationOut(marker=c.marker, evidence_id=c.evidence_id) for c in result.citations],
         evidence={k: EvidenceOut(**v.model_dump()) for k, v in result.evidence.items()},
+        facts={k: FactOut(**v.model_dump()) for k, v in result.facts.items()},
+        derivations={k: DerivationOut(**v.model_dump()) for k, v in result.derivations.items()},
         verification=_verification_out(result),
     )
 
@@ -285,7 +347,13 @@ async def ask_question_stream(body: AskRequest) -> StreamingResponse:
     async def run() -> None:
         try:
             result = await agent_ask(
-                client, _cfg(), body.question, body.entity_id, on_event=on_event, trace=body.trace
+                client,
+                _cfg(),
+                body.question,
+                body.entity_id,
+                history=[turn.model_dump() for turn in body.history],
+                on_event=on_event,
+                trace=body.trace,
             )
             verification = _verification_out(result)
             await queue.put(
@@ -294,12 +362,15 @@ async def ask_question_stream(body: AskRequest) -> StreamingResponse:
                     "answer": result.answer,
                     "citations": [c.model_dump() for c in result.citations],
                     "evidence": {k: v.model_dump() for k, v in result.evidence.items()},
+                    "facts": {k: v.model_dump() for k, v in result.facts.items()},
+                    "derivations": {k: v.model_dump() for k, v in result.derivations.items()},
                     "verification": verification.model_dump() if verification else None,
                 }
             )
         except Exception as exc:  # noqa: BLE001 - surfaced to the client as an error event
             logger.exception("streamed ask failed")
-            await queue.put({"type": "error", "message": str(exc)})
+            # httpx timeouts stringify to "", which left the UI with a blank error.
+            await queue.put({"type": "error", "message": str(exc) or type(exc).__name__})
         finally:
             await queue.put(None)
 

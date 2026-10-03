@@ -60,3 +60,33 @@ class Sec13FHolding(BaseModel):
     source_file: str | None = None
     snapshot_date: str | None = None
     ingested_at: str | None = None
+
+
+class Sec13FValidation(BaseModel):
+    accession_number: str
+    declared_entry_total: int | None = None
+    observed_entry_total: int
+    declared_value_total: int | None = None
+    observed_value_total: int
+    value_unit: str
+    row_count_matches: bool
+    value_total_matches: bool
+    amendment_action: str
+    valid: bool
+    errors: list[str] = []
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
+
+
+class Sec13FOtherManager(BaseModel):
+    accession_number: str
+    other_manager_sk: str
+    cik: str | None = None
+    form13f_file_number: str | None = None
+    crd_number: str | None = None
+    sec_file_number: str | None = None
+    name: str | None = None
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None

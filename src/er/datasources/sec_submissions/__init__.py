@@ -1,0 +1,1 @@
+"""SEC company submissions metadata."""

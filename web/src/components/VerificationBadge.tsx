@@ -28,14 +28,14 @@ import type { Verification, VerificationCheck } from "@/lib/api";
 --------------------------------------------------------------------------- */
 
 const STATUS_ICON = {
-  verified: ShieldCheck,
-  partial: ShieldQuestion,
-  unverified: ShieldAlert,
-  unavailable: CircleSlash,
-} as const;
+  verified: <ShieldCheck />,
+  partial: <ShieldQuestion />,
+  unverified: <ShieldAlert />,
+  unavailable: <CircleSlash />,
+};
 
 function statusIcon(status: string) {
-  return STATUS_ICON[status as keyof typeof STATUS_ICON] ?? CircleSlash;
+  return STATUS_ICON[status as keyof typeof STATUS_ICON] ?? STATUS_ICON.unavailable;
 }
 
 /** One check: a label, a meter, and its reading. The meter's track is a light
@@ -74,12 +74,11 @@ function CheckMeter({ check }: { check: VerificationCheck }) {
 export default function VerificationBadge({ verification }: { verification: Verification | null | undefined }) {
   if (!verification) return null;
 
-  const Icon = statusIcon(verification.status);
   const readings = verification.checks.filter((check) => check.passed !== null);
   const cleared = readings.filter((check) => check.passed).length;
   const header = (
     <>
-      <span className="verify-icon"><Icon /></span>
+      <span className="verify-icon">{statusIcon(verification.status)}</span>
       <span className="verify-summary-copy">
         <strong>{verification.headline}</strong>
         {readings.length > 0 && <small>{cleared}/{readings.length} checks cleared</small>}

@@ -54,3 +54,33 @@ HOLDING_SCHEMA = pa.schema(
         *PROVENANCE_FIELDS,
     ]
 )
+
+VALIDATION_SCHEMA = pa.schema(
+    [
+        ("accession_number", pa.string()),
+        ("declared_entry_total", pa.int64()),
+        ("observed_entry_total", pa.int64()),
+        ("declared_value_total", pa.int64()),
+        ("observed_value_total", pa.int64()),
+        ("value_unit", pa.string()),
+        ("row_count_matches", pa.bool_()),
+        ("value_total_matches", pa.bool_()),
+        ("amendment_action", pa.string()),
+        ("valid", pa.bool_()),
+        ("errors", pa.list_(pa.string())),
+        *PROVENANCE_FIELDS,
+    ]
+)
+
+OTHER_MANAGER_SCHEMA = pa.schema(
+    [
+        ("accession_number", pa.string()),
+        ("other_manager_sk", pa.string()),
+        ("cik", pa.string()),
+        ("form13f_file_number", pa.string()),
+        ("crd_number", pa.string()),
+        ("sec_file_number", pa.string()),
+        ("name", pa.string()),
+        *PROVENANCE_FIELDS,
+    ]
+)

@@ -1,76 +1,33 @@
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
-from er.config import (
-    AppConfig,
-    BenchmarkConfig,
-    EntityConfig,
-    GleifConfig,
-    OpenSearchConfig,
-    SearchConfig,
-    Sec13FConfig,
-)
 from er.graph.build import build_hierarchy, build_hierarchy_tree
 from er.graph.edges import fetch_relationships_among
+from er.serving.store import ENTITIES, RELATIONSHIPS, MemoryStore
 
 
 @pytest.fixture
-def cfg(tmp_path):
-    processed = tmp_path / "processed"
-    processed.mkdir()
-    benchmark_dir = tmp_path / "benchmark"
-    benchmark_dir.mkdir()
-    return AppConfig(
-        gleif=GleifConfig(
-            raw_dir=tmp_path / "raw",
-            processed_dir=processed,
-            entities_zip="e.zip",
-            relationships_zip="r.zip",
-            exceptions_zip="x.zip",
-            isin_lei_zip="i.zip",
-        ),
-        sec_13f=Sec13FConfig(raw_dir=tmp_path / "sec_13f_raw", processed_dir=processed),
-        entity=EntityConfig(processed_dir=processed),
-        opensearch=OpenSearchConfig(index_name="test"),
-        search=SearchConfig(),
-        benchmark=BenchmarkConfig(output_dir=benchmark_dir),
-    )
+def store():
+    return MemoryStore()
 
 
-_ENTITIES_SCHEMA = pa.schema([("lei", pa.string()), ("legal_name", pa.string())])
-_RELATIONSHIPS_SCHEMA = pa.schema(
-    [
-        ("start_node_id", pa.string()),
-        ("end_node_id", pa.string()),
-        ("relationship_type", pa.string()),
-        ("relationship_status", pa.string()),
-    ]
-)
-_EXCEPTIONS_SCHEMA = pa.schema(
-    [("lei", pa.string()), ("exception_category", pa.string()), ("exception_reason", pa.string())]
-)
+def _write_entities(store, rows):
+    for row in rows:
+        doc = store.indexes.setdefault(ENTITIES, {}).setdefault(row["lei"], {"entity_id": row["lei"]})
+        doc["canonical_name"] = row["legal_name"]
 
 
-def _write_entities(cfg, rows):
-    pq.write_table(
-        pa.Table.from_pylist(rows, schema=_ENTITIES_SCHEMA if not rows else None),
-        cfg.gleif.processed_dir / "gleif_entities.parquet",
-    )
+def _write_relationships(store, rows):
+    for row in rows:
+        key = f"{row['start_node_id']}:{row['end_node_id']}:{row['relationship_type']}"
+        store.put(RELATIONSHIPS, key, row)
 
 
-def _write_relationships(cfg, rows):
-    pq.write_table(
-        pa.Table.from_pylist(rows, schema=_RELATIONSHIPS_SCHEMA if not rows else None),
-        cfg.gleif.processed_dir / "gleif_relationships.parquet",
-    )
-
-
-def _write_exceptions(cfg, rows):
-    pq.write_table(
-        pa.Table.from_pylist(rows, schema=_EXCEPTIONS_SCHEMA if not rows else None),
-        cfg.gleif.processed_dir / "gleif_relationship_exceptions.parquet",
-    )
+def _write_exceptions(store, rows):
+    for row in rows:
+        doc = store.indexes.setdefault(ENTITIES, {}).setdefault(row["lei"], {"entity_id": row["lei"]})
+        doc.setdefault("exceptions", []).append(
+            {"exception_category": row["exception_category"], "exception_reason": row["exception_reason"]}
+        )
 
 
 def _entity(lei, name):
@@ -86,12 +43,12 @@ def _rel(start, end, rel_type, status="ACTIVE"):
     }
 
 
-def test_upward_relationship_resolves_parent_with_name(cfg):
-    _write_entities(cfg, [_entity("LEI_CHILD", "Child Fund"), _entity("LEI_PARENT", "Parent Holdings")])
-    _write_relationships(cfg, [_rel("LEI_CHILD", "LEI_PARENT", "IS_DIRECTLY_CONSOLIDATED_BY")])
-    _write_exceptions(cfg, [])
+def test_upward_relationship_resolves_parent_with_name(store):
+    _write_entities(store, [_entity("LEI_CHILD", "Child Fund"), _entity("LEI_PARENT", "Parent Holdings")])
+    _write_relationships(store, [_rel("LEI_CHILD", "LEI_PARENT", "IS_DIRECTLY_CONSOLIDATED_BY")])
+    _write_exceptions(store, [])
 
-    result = build_hierarchy(cfg, "LEI_CHILD")
+    result = build_hierarchy(store, "LEI_CHILD")
 
     assert result.name == "Child Fund"
     assert len(result.upward) == 1
@@ -102,12 +59,12 @@ def test_upward_relationship_resolves_parent_with_name(cfg):
     assert result.downward == []
 
 
-def test_downward_relationship_resolves_subsidiary_with_name(cfg):
-    _write_entities(cfg, [_entity("LEI_MGR", "Manager LLP"), _entity("LEI_FUND", "Managed Fund")])
-    _write_relationships(cfg, [_rel("LEI_FUND", "LEI_MGR", "IS_FUND-MANAGED_BY")])
-    _write_exceptions(cfg, [])
+def test_downward_relationship_resolves_subsidiary_with_name(store):
+    _write_entities(store, [_entity("LEI_MGR", "Manager LLP"), _entity("LEI_FUND", "Managed Fund")])
+    _write_relationships(store, [_rel("LEI_FUND", "LEI_MGR", "IS_FUND-MANAGED_BY")])
+    _write_exceptions(store, [])
 
-    result = build_hierarchy(cfg, "LEI_MGR")
+    result = build_hierarchy(store, "LEI_MGR")
 
     assert result.upward == []
     assert len(result.downward) == 1
@@ -117,24 +74,24 @@ def test_downward_relationship_resolves_subsidiary_with_name(cfg):
     assert edge.label == "Funds managed"
 
 
-def test_inactive_relationships_are_excluded(cfg):
-    _write_entities(cfg, [_entity("LEI_CHILD", "Child"), _entity("LEI_OLD_PARENT", "Old Parent")])
+def test_inactive_relationships_are_excluded(store):
+    _write_entities(store, [_entity("LEI_CHILD", "Child"), _entity("LEI_OLD_PARENT", "Old Parent")])
     _write_relationships(
-        cfg, [_rel("LEI_CHILD", "LEI_OLD_PARENT", "IS_DIRECTLY_CONSOLIDATED_BY", status="INACTIVE")]
+        store, [_rel("LEI_CHILD", "LEI_OLD_PARENT", "IS_DIRECTLY_CONSOLIDATED_BY", status="INACTIVE")]
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    result = build_hierarchy(cfg, "LEI_CHILD")
+    result = build_hierarchy(store, "LEI_CHILD")
 
     assert result.upward == []
     assert result.downward == []
 
 
-def test_exception_reported_when_no_covering_relationship(cfg):
-    _write_entities(cfg, [_entity("LEI_SOLO", "Solo Entity")])
-    _write_relationships(cfg, [])
+def test_exception_reported_when_no_covering_relationship(store):
+    _write_entities(store, [_entity("LEI_SOLO", "Solo Entity")])
+    _write_relationships(store, [])
     _write_exceptions(
-        cfg,
+        store,
         [
             {
                 "lei": "LEI_SOLO",
@@ -144,7 +101,7 @@ def test_exception_reported_when_no_covering_relationship(cfg):
         ],
     )
 
-    result = build_hierarchy(cfg, "LEI_SOLO")
+    result = build_hierarchy(store, "LEI_SOLO")
 
     assert len(result.exceptions) == 1
     exc = result.exceptions[0]
@@ -152,15 +109,15 @@ def test_exception_reported_when_no_covering_relationship(cfg):
     assert exc.reason_text == "no known parent"
 
 
-def test_exception_suppressed_when_active_relationship_covers_it(cfg):
+def test_exception_suppressed_when_active_relationship_covers_it(store):
     # This is the specific safeguard the project keeps calling out: a missing
     # relationship row is not a confirmed absence of a parent, but the inverse
     # matters too - don't report a "gap" when an active relationship already
     # answers the question.
-    _write_entities(cfg, [_entity("LEI_CHILD", "Child"), _entity("LEI_PARENT", "Parent")])
-    _write_relationships(cfg, [_rel("LEI_CHILD", "LEI_PARENT", "IS_ULTIMATELY_CONSOLIDATED_BY")])
+    _write_entities(store, [_entity("LEI_CHILD", "Child"), _entity("LEI_PARENT", "Parent")])
+    _write_relationships(store, [_rel("LEI_CHILD", "LEI_PARENT", "IS_ULTIMATELY_CONSOLIDATED_BY")])
     _write_exceptions(
-        cfg,
+        store,
         [
             {
                 "lei": "LEI_CHILD",
@@ -170,18 +127,18 @@ def test_exception_suppressed_when_active_relationship_covers_it(cfg):
         ],
     )
 
-    result = build_hierarchy(cfg, "LEI_CHILD")
+    result = build_hierarchy(store, "LEI_CHILD")
 
     assert len(result.upward) == 1
     assert result.exceptions == []
 
 
-def test_unknown_entity_with_no_data_returns_empty_result(cfg):
-    _write_entities(cfg, [])
-    _write_relationships(cfg, [])
-    _write_exceptions(cfg, [])
+def test_unknown_entity_with_no_data_returns_empty_result(store):
+    _write_entities(store, [])
+    _write_relationships(store, [])
+    _write_exceptions(store, [])
 
-    result = build_hierarchy(cfg, "LEI_NOWHERE")
+    result = build_hierarchy(store, "LEI_NOWHERE")
 
     assert result.name is None
     assert result.upward == []
@@ -192,11 +149,11 @@ def test_unknown_entity_with_no_data_returns_empty_result(cfg):
 # --- build_hierarchy_tree (multi-hop) -------------------------------------------
 
 
-def test_depth_1_matches_single_hop_behavior_leaves_unexpanded(cfg):
+def test_depth_1_matches_single_hop_behavior_leaves_unexpanded(store):
     # depth=1 (the default) must be identical in spirit to the original single-hop
     # build_hierarchy(): immediate neighbors are shown, but not expanded further.
     _write_entities(
-        cfg,
+        store,
         [
             _entity("LEI_A", "A"),
             _entity("LEI_B", "B"),
@@ -204,15 +161,15 @@ def test_depth_1_matches_single_hop_behavior_leaves_unexpanded(cfg):
         ],
     )
     _write_relationships(
-        cfg,
+        store,
         [
             _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
             _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
         ],
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    root = build_hierarchy_tree(cfg, "LEI_A", depth=1)
+    root = build_hierarchy_tree(store, "LEI_A", depth=1)
 
     assert root.lei == "LEI_A"
     assert len(root.upward) == 1
@@ -222,9 +179,9 @@ def test_depth_1_matches_single_hop_behavior_leaves_unexpanded(cfg):
     assert b.upward == []  # not expanded - would otherwise show LEI_C
 
 
-def test_depth_2_expands_one_more_level(cfg):
+def test_depth_2_expands_one_more_level(store):
     _write_entities(
-        cfg,
+        store,
         [
             _entity("LEI_A", "A"),
             _entity("LEI_B", "B"),
@@ -232,15 +189,15 @@ def test_depth_2_expands_one_more_level(cfg):
         ],
     )
     _write_relationships(
-        cfg,
+        store,
         [
             _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
             _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
         ],
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    root = build_hierarchy_tree(cfg, "LEI_A", depth=2)
+    root = build_hierarchy_tree(store, "LEI_A", depth=2)
 
     b = root.upward[0]
     assert b.expanded is True
@@ -250,14 +207,14 @@ def test_depth_2_expands_one_more_level(cfg):
     assert c.expanded is False  # depth exhausted at this level
 
 
-def test_extra_parent_depth_expands_parents_further_than_children(cfg):
+def test_extra_parent_depth_expands_parents_further_than_children(store):
     # A's parent chain: A -> B -> C -> D (3 hops up). A's child: E (1 hop down).
     _write_entities(
-        cfg,
+        store,
         [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C"), _entity("LEI_D", "D"), _entity("LEI_E", "E")],
     )
     _write_relationships(
-        cfg,
+        store,
         [
             _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
             _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
@@ -265,9 +222,9 @@ def test_extra_parent_depth_expands_parents_further_than_children(cfg):
             _rel("LEI_E", "LEI_A", "IS_DIRECTLY_CONSOLIDATED_BY"),
         ],
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    root = build_hierarchy_tree(cfg, "LEI_A", depth=2, extra_parent_depth=1)
+    root = build_hierarchy_tree(store, "LEI_A", depth=2, extra_parent_depth=1)
 
     # Parents recurse to depth 2+1=3: A -> B -> C -> D, with D as an
     # unexpanded leaf (budget exhausted one hop further than it would be
@@ -287,36 +244,36 @@ def test_extra_parent_depth_expands_parents_further_than_children(cfg):
     assert e.downward == []  # A's own downward not re-expanded (cycle back to root)
 
 
-def test_extra_parent_depth_zero_is_unchanged_from_default(cfg):
-    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
+def test_extra_parent_depth_zero_is_unchanged_from_default(store):
+    _write_entities(store, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
     _write_relationships(
-        cfg,
+        store,
         [
             _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
             _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
         ],
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    with_default = build_hierarchy_tree(cfg, "LEI_A", depth=2)
-    with_explicit_zero = build_hierarchy_tree(cfg, "LEI_A", depth=2, extra_parent_depth=0)
+    with_default = build_hierarchy_tree(store, "LEI_A", depth=2)
+    with_explicit_zero = build_hierarchy_tree(store, "LEI_A", depth=2, extra_parent_depth=0)
 
     assert with_default.model_dump() == with_explicit_zero.model_dump()
 
 
-def test_cycle_does_not_infinite_loop(cfg):
+def test_cycle_does_not_infinite_loop(store):
     # A -> B -> A: a real (if unusual) possibility in GLEIF's relationship data.
-    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B")])
+    _write_entities(store, [_entity("LEI_A", "A"), _entity("LEI_B", "B")])
     _write_relationships(
-        cfg,
+        store,
         [
             _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
             _rel("LEI_B", "LEI_A", "IS_DIRECTLY_CONSOLIDATED_BY"),
         ],
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    root = build_hierarchy_tree(cfg, "LEI_A", depth=5)  # would loop forever without protection
+    root = build_hierarchy_tree(store, "LEI_A", depth=5)  # would loop forever without protection
 
     b = root.upward[0]
     assert b.lei == "LEI_B"
@@ -326,16 +283,16 @@ def test_cycle_does_not_infinite_loop(cfg):
     assert a_again.expanded is False  # already visited - not re-expanded
 
 
-def test_max_nodes_budget_stops_expansion(cfg):
+def test_max_nodes_budget_stops_expansion(store):
     # A chain of 5 entities; a budget of 2 expansions should only expand the root
     # and one more level before truncating.
     entities = [_entity(f"LEI_{i}", f"Entity {i}") for i in range(5)]
     rels = [_rel(f"LEI_{i}", f"LEI_{i+1}", "IS_DIRECTLY_CONSOLIDATED_BY") for i in range(4)]
-    _write_entities(cfg, entities)
-    _write_relationships(cfg, rels)
-    _write_exceptions(cfg, [])
+    _write_entities(store, entities)
+    _write_relationships(store, rels)
+    _write_exceptions(store, [])
 
-    root = build_hierarchy_tree(cfg, "LEI_0", depth=10, max_nodes=2)
+    root = build_hierarchy_tree(store, "LEI_0", depth=10, max_nodes=2)
 
     n1 = root.upward[0]
     assert n1.lei == "LEI_1"
@@ -345,18 +302,18 @@ def test_max_nodes_budget_stops_expansion(cfg):
     assert n2.expanded is False  # budget exhausted
 
 
-def test_direction_children_only_expands_downward(cfg):
-    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
+def test_direction_children_only_expands_downward(store):
+    _write_entities(store, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
     _write_relationships(
-        cfg,
+        store,
         [
             _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),  # A's parent is B (upward from A)
             _rel("LEI_C", "LEI_A", "IS_FUND-MANAGED_BY"),  # C's manager is A (downward from A)
         ],
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    root = build_hierarchy_tree(cfg, "LEI_A", depth=2, direction="children")
+    root = build_hierarchy_tree(store, "LEI_A", depth=2, direction="children")
 
     assert root.upward == []
     assert len(root.downward) == 1
@@ -366,33 +323,32 @@ def test_direction_children_only_expands_downward(cfg):
 # --- fetch_relationships_among (er.family's graph-confirmation query) ----------
 
 
-def test_fetch_relationships_among_only_returns_edges_within_the_pool(cfg):
-    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
+def test_fetch_relationships_among_only_returns_edges_within_the_pool(store):
+    _write_entities(store, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
     _write_relationships(
-        cfg,
+        store,
         [
             _rel("LEI_A", "LEI_B", "IS_FUND-MANAGED_BY"),  # both in pool - should be returned
             _rel("LEI_A", "LEI_C", "IS_FUND-MANAGED_BY"),  # LEI_C not in pool - should be excluded
         ],
     )
-    _write_exceptions(cfg, [])
+    _write_exceptions(store, [])
 
-    edges = fetch_relationships_among(cfg, ["LEI_A", "LEI_B"])
+    edges = fetch_relationships_among(store, ["LEI_A", "LEI_B"])
 
     assert len(edges) == 1
     assert edges[0]["start_node_id"] == "LEI_A"
     assert edges[0]["end_node_id"] == "LEI_B"
 
 
-def test_fetch_relationships_among_excludes_inactive(cfg):
-    _write_entities(cfg, [_entity("LEI_A", "A"), _entity("LEI_B", "B")])
-    _write_relationships(cfg, [_rel("LEI_A", "LEI_B", "IS_FUND-MANAGED_BY", status="INACTIVE")])
-    _write_exceptions(cfg, [])
+def test_fetch_relationships_among_excludes_inactive(store):
+    _write_entities(store, [_entity("LEI_A", "A"), _entity("LEI_B", "B")])
+    _write_relationships(store, [_rel("LEI_A", "LEI_B", "IS_FUND-MANAGED_BY", status="INACTIVE")])
+    _write_exceptions(store, [])
 
-    assert fetch_relationships_among(cfg, ["LEI_A", "LEI_B"]) == []
+    assert fetch_relationships_among(store, ["LEI_A", "LEI_B"]) == []
 
 
 def test_fetch_relationships_among_single_lei_returns_empty():
-    # No config needed - a pool of <2 LEIs can't have an intra-pool edge, and the
-    # function should short-circuit before ever querying.
-    assert fetch_relationships_among(None, ["LEI_A"]) == []
+    # A pool of <2 LEIs can't have an intra-pool edge.
+    assert fetch_relationships_among(MemoryStore(), ["LEI_A"]) == []

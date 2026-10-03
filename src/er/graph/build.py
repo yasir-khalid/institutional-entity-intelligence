@@ -6,8 +6,7 @@ that a missing relationship row does not mean a confirmed absence of a parent.
 
 from __future__ import annotations
 
-from er.config import AppConfig
-from er.graph.edges import fetch_entity_names, fetch_exceptions, fetch_relationships
+from er.graph.edges import fetch_entity, fetch_entity_names, fetch_relationships
 from er.graph.models import (
     EXCEPTION_LABELS,
     EXCEPTION_REASONS,
@@ -17,6 +16,7 @@ from er.graph.models import (
     RelationshipEdge,
     RelationshipException,
 )
+from er.serving.store import Store
 
 DEFAULT_MAX_NODES = 200
 
@@ -29,16 +29,17 @@ _EXCEPTION_COVERED_BY = {
 }
 
 
-def build_hierarchy(cfg: AppConfig, lei: str) -> HierarchyResult:
-    name = fetch_entity_names(cfg, [lei]).get(lei)
-    raw_relationships = fetch_relationships(cfg, lei)
-    raw_exceptions = fetch_exceptions(cfg, lei)
+def build_hierarchy(store: Store, lei: str) -> HierarchyResult:
+    entity = fetch_entity(store, lei)
+    name = entity.get("canonical_name")
+    raw_relationships = fetch_relationships(store, lei)
+    raw_exceptions = entity.get("exceptions") or []
 
     other_leis = {
         r["end_node_id"] if r["start_node_id"] == lei else r["start_node_id"] for r in raw_relationships
     }
     other_leis.discard(lei)
-    names = fetch_entity_names(cfg, list(other_leis))
+    names = fetch_entity_names(store, list(other_leis))
 
     upward: list[RelationshipEdge] = []
     downward: list[RelationshipEdge] = []
@@ -93,7 +94,7 @@ def build_hierarchy(cfg: AppConfig, lei: str) -> HierarchyResult:
 
 
 def build_hierarchy_tree(
-    cfg: AppConfig,
+    store: Store,
     lei: str,
     depth: int = 1,
     direction: str = "all",
@@ -127,7 +128,7 @@ def build_hierarchy_tree(
     def expand(node_lei: str, remaining_up: int, remaining_down: int) -> HierarchyNode:
         visited.add(node_lei)
         budget["remaining"] -= 1
-        flat = build_hierarchy(cfg, node_lei)
+        flat = build_hierarchy(store, node_lei)
         node = HierarchyNode(lei=node_lei, name=flat.name, exceptions=flat.exceptions)
 
         def expand_or_leaf(edge: RelationshipEdge, remaining_up: int, remaining_down: int, can_recurse: bool) -> HierarchyNode:

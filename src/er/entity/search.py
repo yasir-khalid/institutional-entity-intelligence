@@ -9,13 +9,13 @@ per source. er.api.app now imports these and only shapes the HTTP response.
 
 from __future__ import annotations
 
-import duckdb
 from pydantic import BaseModel
 
 from er.config import AppConfig
 from er.indexing.opensearch_index import get_client
 from er.matching.matcher import match
 from er.matching.models import MatchResult
+from er.serving.store import ENTITIES, FILERS, HOLDINGS, Store
 
 
 class EntityMatch(BaseModel):
@@ -33,52 +33,35 @@ class EntityMatch(BaseModel):
     cik: str | None = None  # populated for cusip search - which filer reported holding it
 
 
-def search_by_lei(cfg: AppConfig, lei: str) -> list[EntityMatch]:
-    path = cfg.entity.processed_dir / "entities.parquet"
-    con = duckdb.connect()
-    row = con.execute(
-        f"SELECT entity_id, canonical_name, jurisdiction, legal_country FROM read_parquet('{path}') WHERE entity_id = ?",
-        [lei],
-    ).fetchone()
-    con.close()
-    if not row:
+def search_by_lei(store: Store, lei: str) -> list[EntityMatch]:
+    doc = store.get(ENTITIES, lei, fields=("entity_id", "canonical_name", "jurisdiction", "legal_country"))
+    if doc is None:
         return []
     return [
         EntityMatch(
-            entity_id=row[0], canonical_name=row[1], jurisdiction=row[2], legal_country=row[3], matched_via="lei"
+            entity_id=doc["entity_id"],
+            canonical_name=doc["canonical_name"],
+            jurisdiction=doc.get("jurisdiction"),
+            legal_country=doc.get("legal_country"),
+            matched_via="lei",
         )
     ]
 
 
-def search_by_cusip(cfg: AppConfig, cusip: str) -> list[EntityMatch]:
-    holdings_path = cfg.sec_13f.processed_dir / "sec_13f_holdings.parquet"
-    filings_path = cfg.sec_13f.processed_dir / "sec_13f_filings.parquet"
-    crosswalk_path = cfg.sec_13f.processed_dir / "crosswalk_sec_13f_gleif.parquet"
-    if not (holdings_path.exists() and filings_path.exists() and crosswalk_path.exists()):
-        return []
-
-    con = duckdb.connect()
-    rows = con.execute(
-        f"""
-        SELECT DISTINCT f.filer_name, f.cik, x.lei, x.decision
-        FROM read_parquet('{holdings_path}') h
-        JOIN read_parquet('{filings_path}') f USING (accession_number)
-        LEFT JOIN read_parquet('{crosswalk_path}') x USING (cik)
-        WHERE h.cusip = ?
-        LIMIT 25
-        """,
-        [cusip],
-    ).fetchall()
-    con.close()
+def search_by_cusip(store: Store, cusip: str) -> list[EntityMatch]:
+    """13F filers that reported a position in this CUSIP, resolved to their
+    LEI where the crosswalk found one."""
+    holders = store.find(HOLDINGS, where={"cusip": cusip}, collapse="cik", size=25, fields=("cik",))
+    filers = store.mget(FILERS, [holder["cik"] for holder in holders], fields=("filer_name", "lei", "decision"))
     return [
         EntityMatch(
-            entity_id=lei or f"unresolved-cik-{cik}",
-            canonical_name=filer_name,
-            decision=decision,
+            entity_id=filers.get(holder["cik"], {}).get("lei") or f"unresolved-cik-{holder['cik']}",
+            canonical_name=filers.get(holder["cik"], {}).get("filer_name") or holder["cik"],
+            decision=filers.get(holder["cik"], {}).get("decision"),
             matched_via="cusip",
-            cik=cik,
+            cik=holder["cik"],
         )
-        for filer_name, cik, lei, decision in rows
+        for holder in holders
     ]
 
 

@@ -72,6 +72,10 @@ MAPPING = {
 
 
 def get_client(cfg: AppConfig) -> OpenSearch:
+    return get_client_for(cfg.opensearch_url)
+
+
+def get_client_for(url: str) -> OpenSearch:
     # A long-running caller (er.evaluation.run_benchmark, er.crosswalk) makes
     # thousands of sequential requests - the default 10s timeout with no retry is
     # too brittle for that (confirmed live: a single transient read timeout, likely
@@ -79,8 +83,10 @@ def get_client(cfg: AppConfig) -> OpenSearch:
     # evaluation run outright). Retrying idempotent GET/POST _search requests on a
     # timeout is safe - a search has no side effects to double-apply.
     return OpenSearch(
-        hosts=[cfg.opensearch_url],
-        use_ssl=cfg.opensearch_url.startswith("https"),
+        hosts=[url],
+        use_ssl=url.startswith("https"),
+        # er.serving.publish bulk-loads on several threads through one client.
+        pool_maxsize=8,
         timeout=30,
         max_retries=3,
         retry_on_timeout=True,

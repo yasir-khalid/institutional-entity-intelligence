@@ -9,8 +9,19 @@ worst failure mode (worse than no match at all).
 
 from __future__ import annotations
 
-from er.config import MatchingDecisionThresholds
+import hashlib
+import json
+
+from er.config import MatchingConfig, MatchingDecisionThresholds
 from er.matching.models import CandidateScore, Decision
+
+
+def config_fingerprint(matching: MatchingConfig) -> str:
+    """Short hash of every weight, penalty and threshold. Stored with each
+    decision so a persisted match can be traced to the exact config that made
+    it, and a retune visibly separates old decisions from new ones."""
+    payload = json.dumps(matching.model_dump(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
 def decide(

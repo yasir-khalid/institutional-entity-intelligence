@@ -40,6 +40,7 @@ class GleifEntity(BaseModel):
     initial_registration_date: str | None = None
     last_update_date: str | None = None
     next_renewal_date: str | None = None
+    successor_lei: str | None = None
 
     # derived fields
     name_tokens: list[str] = []
@@ -88,6 +89,15 @@ class IsinLei(BaseModel):
     lei: str
 
     # provenance
+    source_file: str | None = None
+    snapshot_date: str | None = None
+    ingested_at: str | None = None
+
+
+class GleifExternalIdentifier(BaseModel):
+    lei: str
+    identifier_type: str
+    identifier_value: str
     source_file: str | None = None
     snapshot_date: str | None = None
     ingested_at: str | None = None

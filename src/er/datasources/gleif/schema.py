@@ -42,6 +42,7 @@ ENTITY_SCHEMA = pa.schema(
         ("initial_registration_date", pa.string()),
         ("last_update_date", pa.string()),
         ("next_renewal_date", pa.string()),
+        ("successor_lei", pa.string()),
         ("name_tokens", pa.list_(pa.string())),
         ("postcode_prefix", pa.string()),
         ("fund_number", pa.int32()),
@@ -80,6 +81,15 @@ ISIN_LEI_SCHEMA = pa.schema(
     [
         ("isin", pa.string()),
         ("lei", pa.string()),
+        *PROVENANCE_FIELDS,
+    ]
+)
+
+EXTERNAL_IDENTIFIER_SCHEMA = pa.schema(
+    [
+        ("lei", pa.string()),
+        ("identifier_type", pa.string()),
+        ("identifier_value", pa.string()),
         *PROVENANCE_FIELDS,
     ]
 )

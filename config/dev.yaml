@@ -12,6 +12,51 @@ sec_13f:
   processed_dir: data/processed
   batch_size: 50000
 
+sec_submissions:
+  raw_dir: data/raw/sec_submissions
+  processed_dir: data/processed
+  source_url: https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip
+  source_file: submissions.zip
+
+sec_series_class:
+  raw_dir: data/raw/sec_series_class
+  processed_dir: data/processed
+  source_url: https://www.sec.gov/files/investment/data/other/investment-company-series-class-information/investment-company-series-class-2026.csv
+  source_file: investment-company-series-class-2026.csv
+
+openfigi:
+  raw_dir: data/raw/openfigi
+  processed_dir: data/processed
+  api_url: https://api.openfigi.com/v3/mapping
+
+nport:
+  raw_dir: data/raw/nport
+  processed_dir: data/processed
+
+sec_insiders:
+  raw_dir: data/raw/sec_insiders
+  processed_dir: data/processed
+  source_url: https://www.sec.gov/files/datastandardsinnovation/data/insider-transactions-data-sets/2026q2_form345.zip
+  source_file: 2026q2_form345.zip
+
+sec_adv:
+  raw_dir: data/raw/sec_adv
+  processed_dir: data/processed
+
+companies_house:
+  raw_dir: data/raw/companies_house
+  processed_dir: data/processed
+
+sec_13dg:
+  raw_dir: data/raw/sec_13dg
+  processed_dir: data/processed
+  quarters: ["2026Q2"]
+  requests_per_second: 8
+
+ffiec_nic:
+  raw_dir: data/raw/ffiec_nic
+  processed_dir: data/processed
+
 entity:
   processed_dir: data/processed
 

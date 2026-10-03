@@ -1,6 +1,6 @@
 """Orchestrator: retrieve a broad candidate pool, classify each by brand-core tier,
 confirm with intra-pool graph evidence. The only file in this package that talks to
-OpenSearch/DuckDB - brand.py stays pure and testable without a live cluster.
+OpenSearch - brand.py stays pure and testable without a live cluster.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from er.family.brand import classify_tier, extract_brand_core, guess_role
 from er.family.models import FamilyMember, FamilyResult, RelationshipEvidence
 from er.graph.edges import fetch_relationships_among
 from er.retrieval.candidates import search_candidates
+from er.serving.store import get_store
 
 
 def discover_family(client: OpenSearch, cfg: AppConfig, name: str, country: str | None = None) -> FamilyResult:
@@ -39,7 +40,7 @@ def discover_family(client: OpenSearch, cfg: AppConfig, name: str, country: str 
         )
         by_lei[c["lei"]] = c
 
-    edges = fetch_relationships_among(cfg, list(by_lei.keys()))
+    edges = fetch_relationships_among(get_store(cfg), list(by_lei.keys()))
     confirmed_leis: set[str] = set()
     evidence: list[RelationshipEvidence] = []
     for e in edges:

@@ -25,6 +25,7 @@ from rich.console import Console
 
 from er.cli.entity_render import render
 from er.config import load_config
+from er.serving.store import get_store
 from er.entity.profile import get_entity_profile
 
 
@@ -76,11 +77,11 @@ def main() -> None:
         return
 
     with console.status("[bold cyan]Fetching entity profile (identifiers, relationships, SEC activity)...[/bold cyan]"):
-        profile = get_entity_profile(cfg, entity_id)
+        profile = get_entity_profile(get_store(cfg), entity_id)
     elapsed = time.monotonic() - started
 
     if profile is None:
-        console.print(f"[red]No canonical entity found for {entity_id}.[/red] Run `make build-entities` first?")
+        console.print(f"[red]No canonical entity found for {entity_id}.[/red] Run `make build-entities` and `make publish` first?")
         return
 
     render(console, profile)

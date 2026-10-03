@@ -19,7 +19,9 @@ src/er/
 │                             ingest_gleif.py, ingest_sec_13f.py, index.py,
 │                             validate.py, benchmark.py, evaluate.py,
 │                             crosswalk_sec_13f.py, build_entities.py,
-│                             mcp_server.py, ask.py.
+│                             build_knowledge_graph.py, mcp_server.py, ask.py,
+│                             evaluate_agent.py, and one ingest_<source>.py
+│                             per data source.
 ├── datasources/<source>/   # one folder per data source (gleif, sec_13f, ...) -
 │                             owns its OWN raw-file parsing, pydantic models,
 │                             pyarrow schema, and ingest.py end to end. Each
@@ -32,8 +34,13 @@ src/er/
 ├── normalisation/           # pure string/address/country normalization -
 │                             names.py, addresses.py, countries.py. No I/O.
 ├── indexing/                 # OpenSearch index mapping + bulk load
-│                             (opensearch_index.py) - candidate retrieval only,
-│                             never the system of record. CLI: er.cli.index.
+│                             (opensearch_index.py) - candidate retrieval for
+│                             name matching. CLI: er.cli.index.
+├── serving/                  # what runtime code reads: store.py (Store
+│                             contract; OpenSearchStore, and MemoryStore for
+│                             tests) and publish.py (Parquet -> per-read
+│                             serving indexes behind aliases). CLIs:
+│                             er.cli.publish, er.cli.pull_reviews.
 ├── retrieval/                # candidates.py - builds the OpenSearch query,
 │                             search_candidates(). Retrieval-relevance score
 │                             only, not a match decision.
@@ -61,16 +68,41 @@ src/er/
 │                             GLEIF relationships + SEC 13F activity). CLI:
 │                             er.cli.entity (rendering in er.cli.entity_render);
 │                             build.py's run_all() has its own CLI: er.cli.build_entities.
+│                             positions.py / ownership.py load 13F position
+│                             rows and 13D/G owners for the agent tools;
+│                             connections.py (knowledge-graph edges by kind)
+│                             and resolution.py (crosswalk decisions + human
+│                             reviews) back the web entity profile.
+├── knowledge/                  # typed cross-source graph: knowledge_nodes /
+│                             _edges / _identifiers / _facts.parquet, built by
+│                             build.py from whichever sources are present.
+│                             Node types keep legal entities, fund series,
+│                             share classes, securities and people apart, so a
+│                             CUSIP never becomes an identifier of its issuer.
+│                             Edge types keep "parent" (GLEIF accounting),
+│                             "bank control" (FFIEC NIC), "beneficial owner"
+│                             (13D/G), "significant control" (PSC) and "13F
+│                             holding" distinct. Every fact row has an address
+│                             (document_id + locator) back to the source.
+│                             formulas.py is the registry every derived number
+│                             must come from. CLI: er.cli.build_knowledge_graph.
 ├── agent/                      # entity Q&A: mcp_server.py is a real, standalone
 │                             MCP server (search_entity, get_entity_profile,
-│                             get_relationship_hierarchy - each a thin wrapper
-│                             over er.entity.search/profile and er.graph.build,
-│                             unchanged) that any MCP client can talk to.
+│                             get_relationship_hierarchy, search_adv_documents,
+│                             get_position_history, get_beneficial_owners - each
+│                             a thin wrapper over core logic, unchanged) that
+│                             any MCP client can talk to.
 │                             tools.py builds the Evidence for every tool call -
 │                             deterministic provenance (source, criteria, record
 │                             refs, a reproducible query_hash), never an
 │                             LLM-invented confidence score, since there is no
-│                             document corpus here to cite RAG-style.
+│                             document corpus here to cite RAG-style - plus
+│                             addressed Facts, and Derivations recording the
+│                             formula and input facts behind a computed value.
+│                             facts.py is the submission gate's renderer: the
+│                             model writes {{f:fact_id}}, never a literal
+│                             number, and the orchestrator re-runs the tool
+│                             behind every used fact before rendering it.
 │                             orchestrator.py drives an OpenRouter model through
 │                             those tools as a genuine MCP client (stdio, not a
 │                             direct Python import) until it calls a final
@@ -80,7 +112,7 @@ src/er/
 │                             against those tool results with Jev (a decision
 │                             model, OpenRouter's Decisions API). trace.py
 │                             builds the opt-in developer trace (one span per
-│                             model turn / tool call / submit gate / verifier)
+│                             LLM call / tool call / submit gate / verifier)
 │                             streamed to the web Developer view. payloads.py
 │                             is the shared shape-preserving size limit both
 │                             use.
@@ -94,6 +126,10 @@ src/er/
 │                             (metrics.py is pure; run_benchmark.py's
 │                             evaluate()/build_report() are the only functions
 │                             here that hit live OpenSearch). CLI: er.cli.evaluate.
+│                             agent_eval.py is the hard-path check on agent
+│                             answers (cases in config/agent_eval_cases.yaml),
+│                             reported next to Jev's verdict as JUnit XML.
+│                             CLI: er.cli.evaluate_agent.
 └── config.py                   # every tunable (weights, penalties, thresholds,
                               batch sizes, index settings) lives in
                               config/dev.yaml, loaded through this - a retune
@@ -103,7 +139,8 @@ experiments/   # proof-backed retrieval/scoring experiments - see below.
 docs/          # architecture.md (request-flow detail), phases.md (full build
                # history, one section per phase, with real bugs and numbers).
 tests/         # mirrors src/er/ - pure functions get synthetic-fixture unit
-               # tests; nothing here touches live OpenSearch (see er.evaluation
+               # tests; runtime reads use er.serving.store.MemoryStore;
+               # nothing here touches live OpenSearch (see er.evaluation
                # for that).
 web/           # Next.js frontend - search/tree/details UI. Talks ONLY to
                # src/er/api/ over HTTP; never imports Python or touches
@@ -182,15 +219,28 @@ touching another source's code or the canonical entity layer's internals:
    and a loader function to `src/er/entity/profile.py` alongside
    `_load_sec_13f_activity` - guard it the same way (return `None` when the
    source's data isn't available for this entity, never raise).
-5. `make build-entities` to rebuild the canonical layer, then
-   `uv run python -m er.cli.entity --lei ...` to see the new source's data appear.
+5. `make build-entities` (and `make build-knowledge-graph` if the source adds
+   graph edges) to rebuild, `make publish` to push the result to the serving
+   indexes, then `uv run python -m er.cli.entity --lei ...` to see the new
+   source's data appear. Runtime code reads only the serving indexes, so a
+   source that never reaches `er.serving.publish` is invisible to the API.
 
 ## Design decisions (and why)
 
-**Parquet is the system of record; OpenSearch is retrieval-only.** Never write
-code that treats an OpenSearch document as authoritative, or that skips writing
-something to Parquet because "it's already in the index." If OpenSearch is
-dropped and rebuilt from Parquet, nothing should be lost.
+**Parquet is the build-time system of record; OpenSearch is what the runtime
+reads.** Ingest, crosswalk, entity and knowledge-graph builds, benchmarks and
+evals all write and read Parquet. `make publish` (er.serving.publish) shapes it
+into OpenSearch serving indexes, and the API, agent tools and CLIs read only
+those, through `er.serving.store` - never Parquet, so the API deploys with no
+local files. Never write code that treats a serving document as the source of
+truth for anything Parquet holds, or that skips writing to Parquet because
+"it's in the index": dropping OpenSearch and running `make index` + `make
+publish` must lose nothing. The one exception is human match reviews, which
+the API writes to OpenSearch; `make pull-reviews` copies them back for the
+graph build. Shape serving documents per read (one entity document carries
+its identifiers, decisions and connections) - compute joins at publish time,
+not per request - and keep the Store contract (exact filters, OR, missing,
+sort, collapse) small enough that MemoryStore stays an honest stand-in.
 
 **Each data source owns its ETL completely, in its own folder.** A source's
 `models.py`/`schema.py`/`ingest.py` should never import another source's
@@ -253,6 +303,29 @@ a benchmark labeling artifact). Any new query-mutation strategy added to
 `er.benchmark.generate` needs the same collision guard
 (`generate_hard_negatives()`'s `NOT EXISTS` check) before its dangerous-failure
 numbers can be trusted.
+
+**An answer never types a number.** Tools return `Fact`s with an address
+(source, document, locator, field); the model cites them as `{{f:fact_id}}` and
+the gate in `er.agent.orchestrator` renders the value only after re-running the
+tool and getting the same fact back. A computed value (a change, a percentage)
+must come from a formula in `er.knowledge.formulas` and travel as a
+`Derivation` listing its input facts - don't add a tool that returns a
+computed number without one, and don't loosen the "numeric literal" rejection
+in `er.agent.facts` to let one through. Its only exception is text copied
+whole from a cited fact's value or as-of date, or echoed from the question
+(identifiers and dates, not computed values).
+
+**Match decisions and reviews are evidence, not state.** The crosswalk keeps
+each decision's score, runner-up, feature contributions and config
+fingerprint; a human review (`data/reviews/match_reviews.csv`) is a separate,
+dated record that takes precedence in the graph. Never write code that edits a
+stored decision in place to "apply" a review.
+
+**Ingest validates before it stores.** 13F filings whose information table
+doesn't reconcile with the summary page's row count or value total go to
+`sec_13f_quarantine.parquet` with a typed reason, not into the holdings.
+Value scale follows the filing date (before 3 Jan 2023: thousands), never the
+report period, and put/call rows are not long positions.
 
 **SEC 13F is "latest reported holdings," never "holdings" or "portfolio"
 unqualified.** Form 13F covers only certain reportable US equity securities as

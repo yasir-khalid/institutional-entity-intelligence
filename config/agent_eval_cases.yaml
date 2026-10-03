@@ -1,0 +1,30 @@
+# Hard-path agent evaluation cases (er.evaluation.agent_eval, make evaluate-agent).
+# expect_facts names predicates the answer must state through a fact placeholder;
+# a value pins it. Leave values off for data that moves between snapshots.
+- id: registration-status
+  question: What is this entity's LEI registration status, and when is its next renewal due?
+  entity_id: 254900ESP1ZKG7UNS007
+  expect_facts:
+    - predicate: entity.next_renewal_date
+  expect_sources: [GLEIF registration lineage]
+
+- id: ultimate-parent
+  question: Who is this entity's ultimate accounting parent?
+  entity_id: 254900ESP1ZKG7UNS007
+  expect_sources: [GLEIF relationship]
+
+- id: latest-13f
+  question: Which period does its most recent 13F report cover, and how many securities does it report?
+  entity_id: GP3V77BIVE9P1GT44767
+  expect_facts:
+    - predicate: sec_13f.latest_period_of_report
+    - predicate: sec_13f.reported_security_count
+  expect_sources: [SEC 13F filing]
+
+- id: position-change
+  question: How did its reported Microsoft position (CUSIP 594918104) change between its two most recent 13F reports?
+  entity_id: GP3V77BIVE9P1GT44767
+  expect_facts:
+    - predicate: position.change:594918104
+    - predicate: position.percent_change:594918104
+  expect_sources: [Calculated from 13F]

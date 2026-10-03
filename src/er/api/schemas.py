@@ -7,7 +7,9 @@ logic never imports this module.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class SearchResult(BaseModel):
@@ -64,6 +66,7 @@ class EntityLineageOut(BaseModel):
 class Sec13FHoldingOut(BaseModel):
     name_of_issuer: str
     value: int | None = None
+    cusip: str | None = None
 
 
 class Sec13FActivityOut(BaseModel):
@@ -71,7 +74,10 @@ class Sec13FActivityOut(BaseModel):
     latest_period_of_report: str | None = None
     latest_filing_date: str | None = None
     reported_security_count: int = 0
+    value_unit: str = "USD"
     top_reported_holdings: list[Sec13FHoldingOut] = []
+    quarantined_filings: list[str] = []
+    scale_suspect_filings: list[str] = []
 
 
 class EvidenceOut(BaseModel):
@@ -85,6 +91,50 @@ class EvidenceOut(BaseModel):
     result_count: int | None = None
     query_hash: str
     warnings: list[str] = []
+    source_uri: str | None = None
+    page: int | None = None
+
+
+class FactAddressOut(BaseModel):
+    source: str
+    document_id: str
+    snapshot_id: str | None = None
+    locator: str
+    field: str
+    uri: str | None = None
+    page: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+
+
+class FactOut(BaseModel):
+    """One addressed value an answer stated - see er.agent.models.Fact."""
+
+    fact_id: str
+    evidence_id: str
+    subject: str
+    predicate: str
+    value: str | int | float | bool | None
+    unit: str | None = None
+    as_of: str | None = None
+    address: FactAddressOut
+
+
+class DerivationOut(BaseModel):
+    fact_id: str
+    formula_id: str
+    expression: str
+    inputs: list[str]
+
+
+class ToolResultOut(BaseModel):
+    """A deterministic tool result served straight to the UI (no model in the
+    loop): its data plus the evidence, facts and derivations behind it."""
+
+    data: dict
+    evidence: list[EvidenceOut] = []
+    facts: list[FactOut] = []
+    derivations: list[DerivationOut] = []
 
 
 class CitationOut(BaseModel):
@@ -92,9 +142,21 @@ class CitationOut(BaseModel):
     evidence_id: str
 
 
+class ConversationTurn(BaseModel):
+    """Prior text from this browser conversation, supplied as context only.
+
+    It intentionally carries no evidence IDs or tool payloads: every new agent
+    answer must still gather and cite evidence produced during its own run.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=8_000)
+
+
 class AskRequest(BaseModel):
     question: str
     entity_id: str | None = None
+    history: list[ConversationTurn] = Field(default_factory=list, max_length=8)
     # Stream developer trace spans (model turns, tool calls, payloads,
     # timings) alongside the progress events - see er.agent.trace. Only
     # /api/ask/stream honours it; a non-streaming response has nowhere to put
@@ -130,7 +192,74 @@ class AskResponse(BaseModel):
     answer: str
     citations: list[CitationOut] = []
     evidence: dict[str, EvidenceOut] = {}
+    facts: dict[str, FactOut] = {}
+    derivations: dict[str, DerivationOut] = {}
     verification: VerificationOut | None = None
+
+
+class LinkedRecordOut(BaseModel):
+    node_id: str
+    display_name: str | None = None
+    source: str
+
+
+class ConnectionOut(BaseModel):
+    edge_type: str
+    direction: str
+    other_node_id: str
+    other_name: str | None = None
+    other_type: str | None = None
+    source: str
+    valid_from: str | None = None
+    valid_to: str | None = None
+    percent: float | None = None
+    source_url: str | None = None
+
+
+class ConnectionGroupOut(BaseModel):
+    edge_type: str
+    direction: str
+    total: int
+    connections: list[ConnectionOut]
+
+
+class EntityConnectionsOut(BaseModel):
+    linked_records: list[LinkedRecordOut] = []
+    groups: list[ConnectionGroupOut] = []
+
+
+class MatchReviewOut(BaseModel):
+    node_id: str
+    lei: str
+    outcome: str
+    reviewer: str
+    reviewed_at: str
+    rationale: str | None = None
+
+
+class MatchDecisionOut(BaseModel):
+    node_id: str
+    source_name: str | None = None
+    lei: str | None = None
+    decision: str
+    score: float | None = None
+    gap: float | None = None
+    reason: str | None = None
+    runner_up_lei: str | None = None
+    runner_up_name: str | None = None
+    runner_up_score: float | None = None
+    feature_contributions: dict[str, float] = {}
+    config_hash: str | None = None
+    decided_on: str | None = None
+    reviews: list[MatchReviewOut] = []
+
+
+class ReviewRequest(BaseModel):
+    node_id: str
+    lei: str
+    outcome: str
+    reviewer: str
+    rationale: str | None = None
 
 
 class EntityDetail(BaseModel):
@@ -142,6 +271,9 @@ class EntityDetail(BaseModel):
     entity_status: str | None = None
     lineage: EntityLineageOut | None = None
     identifiers: list[EntityIdentifierOut] = []
+    identifier_total: int = 0
     sec_13f: Sec13FActivityOut | None = None
     parent_count: int = 0
     subsidiary_count: int = 0
+    connections: EntityConnectionsOut = EntityConnectionsOut()
+    match_decisions: list[MatchDecisionOut] = []

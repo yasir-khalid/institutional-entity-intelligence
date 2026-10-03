@@ -51,10 +51,10 @@ export function Badge({
   );
 }
 
-/** Identifiers (LEI/CIK/CUSIP/ISIN) - always monospace + tabular so they read
- * as codes and align when stacked. */
+/** Identifiers (LEI/CIK/CUSIP/ISIN) - tabular figures so they align when
+ * stacked. Deliberately not monospace: the UI has one typeface. */
 export function Mono({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <span className={`tabular font-mono text-[11px] tracking-tight ${className}`}>{children}</span>;
+  return <span className={`tabular text-[11px] tracking-tight ${className}`}>{children}</span>;
 }
 
 /** One label/value pair inside a definition grid. The grid itself owns the

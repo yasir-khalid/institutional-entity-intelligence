@@ -23,14 +23,109 @@ class GleifConfig(BaseModel):
     batch_size: int = 50_000
 
 
+class Sec13FScaleCheck(BaseModel):
+    # A filing is flagged when the median of its rows' implied price / the
+    # cross-filer median for that CUSIP falls in this band (i.e. ~1/1000).
+    thousands_ratio_low: float = 0.0005
+    thousands_ratio_high: float = 0.002
+    min_rows: int = 5
+    min_filers_per_cusip: int = 5
+
+
 class Sec13FConfig(BaseModel):
     raw_dir: Path
     processed_dir: Path
     batch_size: int = 50_000
+    scale_check: Sec13FScaleCheck = Sec13FScaleCheck()
+
+
+class SecSubmissionsConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_submissions")
+    processed_dir: Path = Path("data/processed")
+    source_url: str = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip"
+    source_file: str = "submissions.zip"
+    batch_size: int = 25_000
+
+
+class SecSeriesClassConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_series_class")
+    processed_dir: Path = Path("data/processed")
+    source_url: str = (
+        "https://www.sec.gov/files/investment/data/other/"
+        "investment-company-series-class-information/"
+        "investment-company-series-class-2026.csv"
+    )
+    source_file: str = "investment-company-series-class-2026.csv"
+    batch_size: int = 25_000
+
+
+class OpenFigiConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/openfigi")
+    processed_dir: Path = Path("data/processed")
+    api_url: str = "https://api.openfigi.com/v3/mapping"
+    batch_size_without_key: int = 10
+    batch_size_with_key: int = 100
+
+
+class NPortConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/nport")
+    processed_dir: Path = Path("data/processed")
+    batch_size: int = 50_000
+
+
+class SecInsidersConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_insiders")
+    processed_dir: Path = Path("data/processed")
+    source_url: str = (
+        "https://www.sec.gov/files/datastandardsinnovation/data/"
+        "insider-transactions-data-sets/2026q2_form345.zip"
+    )
+    source_file: str = "2026q2_form345.zip"
+    batch_size: int = 50_000
+
+
+class SecAdvConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_adv")
+    processed_dir: Path = Path("data/processed")
+    batch_size: int = 5_000
+
+
+class CompaniesHouseConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/companies_house")
+    processed_dir: Path = Path("data/processed")
+    batch_size: int = 50_000
+
+
+class Sec13DGConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_13dg")
+    processed_dir: Path = Path("data/processed")
+    quarters: list[str] = ["2026Q2"]
+    max_filings: int | None = None
+    requests_per_second: float = 8
+    workers: int = 6
+    batch_size: int = 25_000
+
+
+class FfiecNicConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/ffiec_nic")
+    processed_dir: Path = Path("data/processed")
+    batch_size: int = 50_000
+
+
+class ServingConfig(BaseModel):
+    # Every serving index is reached through an alias "<prefix>_<name>" (see
+    # er.serving.store); `make publish` builds a dated index and swaps the alias.
+    prefix: str = "er"
+    bulk_batch_size: int = 2000
+    connections_per_group: int = 25
 
 
 class EntityConfig(BaseModel):
     processed_dir: Path
+    # Human match reviews (CSV: source, source_record_id, lei, outcome,
+    # reviewer, reviewed_at, rationale). A review never edits the automated
+    # decision - both are kept and the review takes precedence in the graph.
+    review_file: Path = Path("data/reviews/match_reviews.csv")
 
 
 class BenchmarkConfig(BaseModel):
@@ -183,6 +278,16 @@ class AgentConfig(BaseModel):
 class AppConfig(BaseModel):
     gleif: GleifConfig
     sec_13f: Sec13FConfig
+    sec_submissions: SecSubmissionsConfig = SecSubmissionsConfig()
+    sec_series_class: SecSeriesClassConfig = SecSeriesClassConfig()
+    openfigi: OpenFigiConfig = OpenFigiConfig()
+    nport: NPortConfig = NPortConfig()
+    sec_insiders: SecInsidersConfig = SecInsidersConfig()
+    sec_adv: SecAdvConfig = SecAdvConfig()
+    companies_house: CompaniesHouseConfig = CompaniesHouseConfig()
+    sec_13dg: Sec13DGConfig = Sec13DGConfig()
+    ffiec_nic: FfiecNicConfig = FfiecNicConfig()
+    serving: ServingConfig = ServingConfig()
     entity: EntityConfig
     opensearch: OpenSearchConfig
     search: SearchConfig
@@ -209,14 +314,31 @@ class AppConfig(BaseModel):
             )
         return key
 
+    @property
+    def openfigi_api_key(self) -> str | None:
+        return os.environ.get("OPENFIGI_API_KEY")
+
 
 @lru_cache
 def load_config(path: str | Path = REPO_ROOT / "config" / "dev.yaml") -> AppConfig:
     raw = yaml.safe_load(Path(path).read_text())
-    raw["gleif"]["raw_dir"] = REPO_ROOT / raw["gleif"]["raw_dir"]
-    raw["gleif"]["processed_dir"] = REPO_ROOT / raw["gleif"]["processed_dir"]
-    raw["sec_13f"]["raw_dir"] = REPO_ROOT / raw["sec_13f"]["raw_dir"]
-    raw["sec_13f"]["processed_dir"] = REPO_ROOT / raw["sec_13f"]["processed_dir"]
-    raw["entity"]["processed_dir"] = REPO_ROOT / raw["entity"]["processed_dir"]
-    raw["benchmark"]["output_dir"] = REPO_ROOT / raw["benchmark"]["output_dir"]
-    return AppConfig.model_validate(raw)
+    cfg = AppConfig.model_validate(raw)
+    for section in (
+        cfg.gleif,
+        cfg.sec_13f,
+        cfg.sec_submissions,
+        cfg.sec_series_class,
+        cfg.openfigi,
+        cfg.nport,
+        cfg.sec_insiders,
+        cfg.sec_adv,
+        cfg.companies_house,
+        cfg.sec_13dg,
+        cfg.ffiec_nic,
+    ):
+        section.raw_dir = REPO_ROOT / section.raw_dir
+        section.processed_dir = REPO_ROOT / section.processed_dir
+    cfg.entity.processed_dir = REPO_ROOT / cfg.entity.processed_dir
+    cfg.entity.review_file = REPO_ROOT / cfg.entity.review_file
+    cfg.benchmark.output_dir = REPO_ROOT / cfg.benchmark.output_dir
+    return cfg

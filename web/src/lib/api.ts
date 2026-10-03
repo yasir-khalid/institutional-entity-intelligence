@@ -4,6 +4,10 @@
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export function apiUrl(path: string): string {
+  return path.startsWith("/") ? `${API_URL}${path}` : path;
+}
+
 export type SearchType = "name" | "lei" | "cusip";
 
 export interface SearchResult {
@@ -55,6 +59,7 @@ export interface EntityLineage {
 export interface Sec13FHolding {
   name_of_issuer: string;
   value: number | null;
+  cusip: string | null;
 }
 
 export interface Sec13FActivity {
@@ -62,7 +67,72 @@ export interface Sec13FActivity {
   latest_period_of_report: string | null;
   latest_filing_date: string | null;
   reported_security_count: number;
+  value_unit: string;
   top_reported_holdings: Sec13FHolding[];
+  /** "accession: ERROR, ..." for filings kept out of the holdings because
+   * they did not reconcile with their own summary page. */
+  quarantined_filings: string[];
+  /** Latest-period filings whose values look like thousands despite the
+   * whole-dollar rule. Shown as filed, flagged rather than rescaled. */
+  scale_suspect_filings: string[];
+}
+
+/* Relationships from sources other than GLEIF's hierarchy, from the knowledge
+   graph (er.entity.connections). Each edge_type is a different claim - bank
+   control, >5% beneficial ownership, significant control, insider, succession -
+   and the UI keeps them apart. `direction` is from this entity's side. */
+export interface Connection {
+  edge_type: string;
+  direction: "outgoing" | "incoming";
+  other_node_id: string;
+  other_name: string | null;
+  other_type: string | null;
+  source: string;
+  valid_from: string | null;
+  valid_to: string | null;
+  percent: number | null;
+  source_url: string | null;
+}
+
+export interface ConnectionGroup {
+  edge_type: string;
+  direction: "outgoing" | "incoming";
+  total: number;
+  connections: Connection[];
+}
+
+export interface LinkedRecord {
+  node_id: string;
+  display_name: string | null;
+  source: string;
+}
+
+export interface MatchReview {
+  node_id: string;
+  lei: string;
+  outcome: "CONFIRMED" | "REJECTED";
+  reviewer: string;
+  reviewed_at: string;
+  rationale: string | null;
+}
+
+/** The stored crosswalk decision linking a source record to this LEI
+ * (er.entity.resolution) - the evidence for "this CIK is this entity". */
+export interface MatchDecision {
+  node_id: string;
+  source_name: string | null;
+  lei: string | null;
+  decision: string;
+  score: number | null;
+  gap: number | null;
+  reason: string | null;
+  runner_up_lei: string | null;
+  runner_up_name: string | null;
+  runner_up_score: number | null;
+  feature_contributions: Record<string, number>;
+  config_hash: string | null;
+  decided_on: string | null;
+  reviews: MatchReview[];
 }
 
 export interface EntityDetail {
@@ -74,9 +144,13 @@ export interface EntityDetail {
   entity_status: string | null;
   lineage: EntityLineage | null;
   identifiers: EntityIdentifier[];
+  /** Every identifier attached; `identifiers` holds up to 200 per type. */
+  identifier_total: number;
   sec_13f: Sec13FActivity | null;
   parent_count: number;
   subsidiary_count: number;
+  connections: { linked_records: LinkedRecord[]; groups: ConnectionGroup[] };
+  match_decisions: MatchDecision[];
 }
 
 /* ---------------------------------------------------------------------------
@@ -98,6 +172,50 @@ export interface Evidence {
   result_count: number | null;
   query_hash: string;
   warnings: string[];
+  source_uri: string | null;
+  page: number | null;
+}
+
+/* An addressed value (er.agent.models.Fact): the answer states it through a
+   placeholder the server fills in, so every number in an answer has one of
+   these behind it - source, document, and the exact place in it. */
+export interface FactAddress {
+  source: string;
+  document_id: string;
+  snapshot_id: string | null;
+  locator: string;
+  field: string;
+  uri: string | null;
+  page: number | null;
+  char_start: number | null;
+  char_end: number | null;
+}
+
+export interface Fact {
+  fact_id: string;
+  evidence_id: string;
+  subject: string;
+  predicate: string;
+  value: string | number | boolean | null;
+  unit: string | null;
+  as_of: string | null;
+  address: FactAddress;
+}
+
+/** A computed fact: a registered formula (er.knowledge.formulas) applied to
+ * input facts, each of which is in the same facts map. */
+export interface Derivation {
+  fact_id: string;
+  formula_id: string;
+  expression: string;
+  inputs: string[];
+}
+
+export interface ToolResult {
+  data: Record<string, unknown>;
+  evidence: Evidence[];
+  facts: Fact[];
+  derivations: Derivation[];
 }
 
 export interface Citation {
@@ -134,19 +252,27 @@ export interface AskResponse {
   answer: string;
   citations: Citation[];
   evidence: Record<string, Evidence>;
+  facts: Record<string, Fact>;
+  derivations: Record<string, Derivation>;
   verification: Verification | null;
 }
 
-/* One step of an agent run, mirrored from er.agent.trace.TraceSpan - a model
-   turn, an MCP tool call, the submit_answer gate, or the verifier. Only
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/* One step of an agent run, mirrored from er.agent.trace.TraceSpan - an LLM
+   call, an MCP tool call, the submit_answer gate, or the verifier. Only
    streamed when the request asks for `trace`. `start_ms` is relative to the
    start of the run so spans lay out as a waterfall directly. `detail` differs
    by kind; DeveloperPanel reads it field by field. */
 export interface TraceSpan {
   id: string;
-  /** The model turn that requested this call; null for turns and the verifier,
-   * which sit directly under the run. Makes the trace a tree. */
-  parent_id: string | null;
+  /** The LLM call that requested this tool call or submission; null for LLM
+   * calls and the verifier. Provenance only - every span is a step directly
+   * under the run. */
+  requested_by: string | null;
   kind: "llm" | "tool" | "submit" | "verifier";
   name: string;
   start_ms: number;
@@ -168,6 +294,8 @@ export interface AskStreamEvent {
   answer?: string;
   citations?: Citation[];
   evidence?: Record<string, Evidence>;
+  facts?: Record<string, Fact>;
+  derivations?: Record<string, Derivation>;
   status?: string;
   detail?: string;
   verification?: Verification | null;
@@ -197,32 +325,47 @@ export function getEntityDetail(entityId: string): Promise<EntityDetail> {
   return getJson(`/api/entity/${encodeURIComponent(entityId)}`);
 }
 
-export async function askQuestion(question: string, entityId: string | null): Promise<AskResponse> {
-  const res = await fetch(`${API_URL}/api/ask`, {
+export function getPositionHistory(cik: string, cusip: string): Promise<ToolResult> {
+  return getJson(`/api/positions/${encodeURIComponent(cik)}/${encodeURIComponent(cusip)}`);
+}
+
+export async function submitReview(review: {
+  node_id: string;
+  lei: string;
+  outcome: "CONFIRMED" | "REJECTED";
+  reviewer: string;
+  rationale: string;
+}): Promise<MatchReview> {
+  const res = await fetch(`${API_URL}/api/reviews`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, entity_id: entityId }),
+    body: JSON.stringify(review),
   });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
   }
-  return res.json() as Promise<AskResponse>;
+  return res.json() as Promise<MatchReview>;
 }
 
-/** Same answer as askQuestion, but consumes /api/ask/stream's Server-Sent
- * Events so the caller can render progress (`onEvent`) instead of waiting on a
- * blank spinner. Resolves with the final answer, or throws on an error event. */
+/** Asks the agent through /api/ask/stream's Server-Sent Events, so the caller
+ * can render progress (`onEvent`) instead of waiting on a blank spinner.
+ * Resolves with the final answer, or throws on an error event. */
 export async function askQuestionStream(
   question: string,
   entityId: string | null,
   onEvent: (event: AskStreamEvent) => void,
-  options: { trace?: boolean } = {},
+  options: { trace?: boolean; history?: ConversationTurn[] } = {},
 ): Promise<AskResponse> {
   const res = await fetch(`${API_URL}/api/ask/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, entity_id: entityId, trace: options.trace ?? false }),
+    body: JSON.stringify({
+      question,
+      entity_id: entityId,
+      trace: options.trace ?? false,
+      history: options.history ?? [],
+    }),
   });
   if (!res.ok || !res.body) {
     const body = await res.text();
@@ -250,6 +393,8 @@ export async function askQuestionStream(
           answer: event.answer ?? "",
           citations: event.citations ?? [],
           evidence: event.evidence ?? {},
+          facts: event.facts ?? {},
+          derivations: event.derivations ?? {},
           verification: event.verification ?? null,
         };
       } else if (event.type === "error") {

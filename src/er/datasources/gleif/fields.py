@@ -125,12 +125,21 @@ def extract_addresses(entity: etree._Element | None, ns: str) -> dict:
 
 def extract_status_fields(entity: etree._Element | None, ns: str) -> dict:
     if entity is None:
-        return {"entity_status": None, "entity_category": None, "jurisdiction": None, "entity_creation_date": None}
+        return {
+            "entity_status": None,
+            "entity_category": None,
+            "jurisdiction": None,
+            "entity_creation_date": None,
+            "successor_lei": None,
+        }
     return {
         "entity_status": element_text(entity.find(f"{{{ns}}}EntityStatus")),
         "entity_category": element_text(entity.find(f"{{{ns}}}EntityCategory")),
         "jurisdiction": element_text(entity.find(f"{{{ns}}}LegalJurisdiction")),
         "entity_creation_date": element_text(entity.find(f"{{{ns}}}EntityCreationDate")),
+        # Set when the entity merged or was otherwise succeeded - the only
+        # pointer from a retired/merged LEI to the one that replaced it.
+        "successor_lei": element_text(entity.find(f"{{{ns}}}SuccessorEntity/{{{ns}}}SuccessorLEI")),
     }
 
 

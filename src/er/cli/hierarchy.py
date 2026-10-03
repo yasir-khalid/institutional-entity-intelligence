@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.tree import Tree
 
 from er.config import load_config
+from er.serving.store import get_store
 from er.graph.build import build_hierarchy_tree
 from er.graph.models import HierarchyNode
 
@@ -128,7 +129,7 @@ def main() -> None:
         lei = result.lei
 
     with console.status(f"[bold cyan]Walking relationship graph (depth={args.depth})...[/bold cyan]"):
-        root = build_hierarchy_tree(cfg, lei, depth=args.depth, direction=args.direction)
+        root = build_hierarchy_tree(get_store(cfg), lei, depth=args.depth, direction=args.direction)
     elapsed = time.monotonic() - started
 
     render(console, root, args.direction)

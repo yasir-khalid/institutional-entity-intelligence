@@ -22,13 +22,48 @@ class Evidence(BaseModel):
     evidence_id: str
     source: str
     source_timestamp: str | None = None
-    fact_type: Literal["lookup", "search_match", "records"]
+    fact_type: Literal["lookup", "search_match", "records", "derivation"]
     criteria: list[str] = []
     record_refs: list[str] = []
     fields_used: list[str] = []
     result_count: int | None = None
     query_hash: str
     warnings: list[str] = []
+    source_uri: str | None = None
+    page: int | None = None
+
+
+class FactAddress(BaseModel):
+    source: str
+    document_id: str
+    snapshot_id: str | None = None
+    locator: str
+    field: str
+    uri: str | None = None
+    page: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+
+
+class Fact(BaseModel):
+    fact_id: str
+    evidence_id: str
+    subject: str
+    predicate: str
+    value: str | int | float | bool | None
+    unit: str | None = None
+    as_of: str | None = None
+    address: FactAddress
+
+
+class Derivation(BaseModel):
+    """How a derived fact was computed: a registered formula (er.knowledge.formulas)
+    applied to other facts, each of which keeps its own source address."""
+
+    fact_id: str
+    formula_id: str
+    expression: str
+    inputs: list[str]
 
 
 class ToolResult(BaseModel):
@@ -39,6 +74,8 @@ class ToolResult(BaseModel):
 
     data: dict[str, Any]
     evidence: list[Evidence] = []
+    facts: list[Fact] = []
+    derivations: list[Derivation] = []
 
 
 class Citation(BaseModel):
@@ -88,4 +125,10 @@ class AskResult(BaseModel):
     answer: str
     citations: list[Citation] = []
     evidence: dict[str, Evidence] = {}
+    # The facts whose placeholders the answer used, as they were re-checked at
+    # submission - what the hard-path evaluation (er.evaluation.agent_eval) scores.
+    facts: dict[str, Fact] = {}
+    # How each derived fact in `facts` was computed, and the input facts it
+    # needs (included in `facts` too, so every input can be shown).
+    derivations: dict[str, Derivation] = {}
     verification: Verification | None = None

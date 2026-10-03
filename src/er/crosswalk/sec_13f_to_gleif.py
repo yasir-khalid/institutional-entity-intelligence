@@ -9,13 +9,16 @@ filings under the same CIK/name).
 
 Output: data/processed/crosswalk_sec_13f_gleif.parquet - filer_name, cik, crd_number,
 resolved lei/decision/score, so any downstream query can join 13F holdings straight
-through to GLEIF-anchored entity data.
+through to GLEIF-anchored entity data. Each row also keeps the winner's feature
+contributions, the runner-up and the matching config fingerprint, so the decision
+itself is citable evidence (er.knowledge.build turns it into facts).
 
 CLI entry point: `python -m er.cli.crosswalk_sec_13f` (or `make crosswalk-sec-13f`).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -27,6 +30,7 @@ import pyarrow as pa
 from er.config import AppConfig
 from er.datasources.common.parquet_writer import PROVENANCE_FIELDS, BatchedParquetWriter
 from er.indexing.opensearch_index import get_client
+from er.matching.decisions import config_fingerprint
 from er.matching.matcher import match
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,10 @@ CROSSWALK_SCHEMA = pa.schema(
         ("score", pa.float64()),
         ("gap", pa.float64()),
         ("reason", pa.string()),
+        ("runner_up_lei", pa.string()),
+        ("runner_up_score", pa.float64()),
+        ("feature_contributions", pa.string()),
+        ("config_hash", pa.string()),
         *PROVENANCE_FIELDS,
     ]
 )
@@ -105,6 +113,7 @@ def build_crosswalk(cfg: AppConfig, out_path: Path | None = None) -> int:
     filers = _unique_filers(cfg)
     ingested_at = datetime.now(timezone.utc).isoformat()
     snapshot_date = datetime.now(timezone.utc).date().isoformat()
+    config_hash = config_fingerprint(cfg.matching)
 
     started = time.monotonic()
     for i, filer in enumerate(filers, start=1):
@@ -116,6 +125,7 @@ def build_crosswalk(cfg: AppConfig, out_path: Path | None = None) -> int:
             country=country,
             city=filer["filer_city"],
         )
+        runner_up = result.candidates[1] if len(result.candidates) > 1 else None
         writer.add(
             {
                 "filer_name": filer["filer_name"],
@@ -129,6 +139,10 @@ def build_crosswalk(cfg: AppConfig, out_path: Path | None = None) -> int:
                 "score": result.score,
                 "gap": result.gap,
                 "reason": result.reason,
+                "runner_up_lei": runner_up.lei if runner_up else None,
+                "runner_up_score": runner_up.score if runner_up else None,
+                "feature_contributions": json.dumps(result.evidence, sort_keys=True),
+                "config_hash": config_hash,
                 "source_file": "sec_13f_filings.parquet",
                 "snapshot_date": snapshot_date,
                 "ingested_at": ingested_at,

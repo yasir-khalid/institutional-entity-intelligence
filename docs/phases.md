@@ -890,3 +890,193 @@ immediately afterwards. It now treats `treeLoading` as loading too.
 ```bash
 cd web && npx tsc --noEmit && npm run build   # both clean
 ```
+
+## Phase 20: addressed facts, a validated 13F, and a typed multi-source graph
+
+Prompted by a teardown of Kepler (a financial-research agent built on "the
+model never emits a number") and an outside review of this agent against it.
+The review said citations were reconstructed after writing. That was not quite
+right: every tool already returned an `Evidence` record at retrieval time. The
+real gap was that a receipt covered a whole lookup, not an individual value or
+a place in a source.
+
+### Facts and the submission gate
+
+Tools now return `Fact`s alongside `Evidence`: a value, unit and as-of date
+plus an address (source, document, locator, field). The model writes
+`{{f:fact_id}}` instead of a number, and `er.agent.facts.render_answer`
+rejects any literal number left in the prose, any unknown fact id, and any
+fact whose evidence wasn't cited. Before rendering, the orchestrator re-runs
+the tool call behind every used fact and rejects the answer if the fact no
+longer resolves or its value changed. Fact ids hash the address and value,
+not the evidence id, so the re-run is comparable.
+
+Computed values come from `er.knowledge.formulas` (`sum`, `difference`,
+`percent_change`). `get_position_history` returns a manager's long position in
+a CUSIP per 13F period, each total derived from the information-table rows and
+each change derived from two totals. A `Derivation` records the formula and
+input fact ids, and the evidence card labels it a calculation and lists the
+formulas.
+
+### 13F, validated before it is stored
+
+The summary page was in the bulk archive but never read. It is now. Of 9,846
+filings, 402 fail reconciliation (174 row-count, 293 value-total mismatches)
+and go to `sec_13f_quarantine.parquet` instead of the holdings. Amendments
+follow SEC semantics: 293 restatements replace their original, 104 "new
+holdings" amendments append to it. 3,822,885 raw rows become 3,499,768
+effective holdings. Value scale follows the filing date, not the period, and
+put/call rows are kept out of positions and top holdings, which now group by
+CUSIP rather than issuer name.
+
+Filers still reporting in thousands after the 2023 switch are flagged, not
+rescaled: 299 of 8,477 comparable filings (experiments/007).
+
+### Sources and the graph
+
+Codex added SEC submissions, Series/Class, Forms 3/4/5, N-PORT, OpenFIGI,
+GLEIF BIC/MIC/OpenCorporates mappings, Form ADV brochures (page-addressed PDF
+text, served by `/api/sources/sec-adv/{file}` so a citation opens the page)
+and Companies House/PSC. This phase added:
+
+- **Schedule 13D/G** (`er.datasources.sec_13dg`): structured XML from EDGAR,
+  one row per reporting person. 13G cover pages name people without CIKs, so
+  a CIK is inferred only when the filing has a single reporting person. Fetches
+  run on six threads under one shared rate limit (8 req/s), retry on
+  connection resets, and cache every document, so a stopped run resumes
+  cheaply. The first version waited the full interval and then the request
+  latency, managing about 2 filings a second. 2026 Q2: 9,348 filings, 21,709
+  reporting-person rows (8,226 with a CIK), 7,057 beneficial-owner edges and
+  4,529 CUSIP-to-issuer edges.
+- **FFIEC NIC** (`er.datasources.ffiec_nic`): RSSD institutions, control
+  relationships and transformations. The site refuses scripted downloads, so
+  it reads zips dropped into `data/raw/ffiec_nic`.
+- **GLEIF successor LEIs**: 34,685 entities now point at the LEI that replaced
+  them.
+
+`er.knowledge.build` unions them into typed nodes, edges, identifiers and
+facts: 3.58M nodes, 2.83M edges, 3.48M identifiers and 3.83M facts, built in
+about 4 seconds. Relationship types stay distinct: a GLEIF accounting parent, NIC bank
+control, a 13D/G beneficial owner, PSC significant control and a 13F holding
+are different claims, and the agent prompt now says so.
+
+### Match decisions are citable
+
+The crosswalk now keeps each decision's runner-up, per-feature contributions
+and matching config fingerprint (`config_fingerprint`), and the graph turns
+them into facts. Human reviews in `data/reviews/match_reviews.csv` are
+separate dated records: the latest outcome per pair adds or removes the link,
+and the automated decision is never edited.
+
+Re-running the crosswalk changed 8 of 10,672 decisions, all AUTO_MATCH to
+REVIEW with the same LEI. The previous file predated experiment 005's
+fund-structure guard. Their reason text is misleading, though: it says the
+score missed the auto-match threshold when the guard fired.
+
+### Hard-path agent evaluation
+
+`make evaluate-agent` runs `config/agent_eval_cases.yaml` through the live
+agent and checks that each answer submitted, every citation resolves, every
+used fact is cited, the expected facts and sources were used, and (with
+`--baseline`) no value moved since an earlier run. Jev's verdict sits next to
+it, and disagreements are flagged in the JUnit output.
+
+Its first runs found three real problems, none of which the unit tests could:
+
+- The top-holdings query, regrouped by CUSIP in this phase, used a bare
+  `value` alias that DuckDB rejects in that position. `get_entity_profile`
+  failed for every 13F filer.
+- The gate rejected grounded text: a CIK, the CUSIP from the question, and
+  report dates like `31-MAR-2026`, whose digits the number scan picked out.
+  An identifier or date copied whole (at least 4 characters) from a cited
+  fact's value or as-of date, or a token echoed from the question, is now
+  stripped before the scan. Anything else numeric still needs a placeholder.
+  Models also dropped the `f_` prefix from fact ids, which is now restored
+  when it names exactly one fact.
+- A model wrote `{{f:f_...}}`, which matched neither the placeholder pattern
+  nor the number scan, so it reached the user verbatim. Malformed
+  placeholders are now a rejection.
+
+After these fixes, four cases pass 25 of 25 hard checks (including baseline
+consistency) and Jev verifies all four.
+
+### In the web UI
+
+The first pass stopped at the API and agent. A check of the running app showed
+how little reached a person: `page.tsx` had been restyled to a four-field
+profile card, and the richer `DetailsPanel` was no longer mounted. The entity
+profile (`web/src/components/EntityProfile.tsx`) now carries identifiers and
+linked records, each link decision with its features, runner-up, config and
+reviews (with a Confirm / Reject form), ownership and control grouped by kind
+of claim, and 13F holdings with quarantine and scale warnings and a per-holding
+position history whose formulas unfold to the filed rows. `EntityDetail` gained
+`connections` and `match_decisions` (`er.entity.connections`,
+`er.entity.resolution`), plus `GET /api/positions/{cik}/{cusip}` and
+`POST /api/reviews`.
+
+Agent answers now return the facts they used, plus the derivations and inputs
+behind any computed fact. Each source card lists its values with their
+addresses. Running it showed raw numbers in answers ("1209344041", a
+percentage without "%"): the gate substituted `str(value)`, and the model is
+not allowed to format numbers itself. Placeholders now render with their unit
+("$1,209,344,041", "0.35%"), absorbing a `$` or `%` the model wrote next to
+one.
+
+### Not done
+
+Bitemporal snapshots (facts carry a snapshot date, but older snapshots are not
+kept), a split-pane source viewer, rendering the original EDGAR or GLEIF view
+of a record, the N-PORT coverage study, Exhibit 21, Wikidata, and per-entity
+fan-out. The tree view, details panel and Ask drawer are still unmounted.
+
+## Phase 21: the API reads OpenSearch, not Parquet
+
+The deployment target is a remote API with no local data, but every runtime
+read except name search went to Parquet through DuckDB: profiles, GLEIF
+hierarchy, 13F activity, connections, decisions, positions, 13D/G, and the
+review CSV. Only GLEIF names had ever been in OpenSearch.
+
+Parquet stays the build-time system of record. A new `make publish`
+(`er.serving.publish`) shapes it into serving indexes, each built under a
+dated name and swapped in behind an alias only once loaded. Runtime code reads
+them through `er.serving.store.Store`. That contract is deliberately small
+(get, multi-get, exact-match find with an OR group, missing fields, sort,
+collapse, put), so the `MemoryStore` the tests use is an honest stand-in for
+`OpenSearchStore`.
+
+Documents are shaped per read, not per table. One entity document carries
+identity, lineage, identifiers, GLEIF exceptions, match decisions and
+cross-source connections, so a profile is two document reads plus the
+hierarchy. The knowledge graph's facts, nodes and identifiers tables (about
+600 MB of Parquet) aren't published: connections are precomputed per LEI at
+publish time.
+
+Two limits found along the way. One issuer carries 656,902 identifiers
+(ISINs), too large for one document and already unusable in the UI, so
+documents keep 200 per type plus the true total. OpenSearch caps a query at
+10,000 hits, and the largest relationship fan-out is 5,497 (positions 1,739
+rows), so plain queries are enough.
+
+Reviews are the one thing the API writes, so OpenSearch is their system of
+record. The index is created on first write with strings mapped as keywords:
+dynamic mapping would make the LEI an analysed text field, and exact lookups
+would silently miss. `make pull-reviews` copies reviews down for
+`build-knowledge-graph`.
+
+Still local: Form ADV brochure search (no data loaded yet; PDFs belong in
+object storage, not OpenSearch).
+
+Checked live after the full publish (3.4M entity documents, 3.5M holdings,
+666k relationships, 2.2 GB of the cluster's 19.5 GB). Search answers in about
+0.2s, a profile in 1.4s, positions in 0.2s. The default tree (depth 2, 30
+expansions) was 25% slower than the Parquet version: each expansion read the
+same entity document twice, once for its name and once for its exceptions.
+One read now covers both, bringing the tree back to about 2.4s, level with
+DuckDB.
+
+The agent runs also surfaced two problems with the fact gate, neither caused
+by the store. The gate rejected a holding's CUSIP as a bare number because only
+the holding's value was a fact. The profile tool now emits the CUSIP as a fact
+at the same address. And a model still calling tools on its last turn ran out
+the budget with evidence in hand. In one run it spent three calls on the empty
+ADV index. The last turn now forces `submit_answer`.

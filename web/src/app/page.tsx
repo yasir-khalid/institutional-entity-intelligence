@@ -1,21 +1,26 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Bot, Building2, Check, ChevronRight, CircleAlert, FileText, Loader2, Search, SquareTerminal, Waypoints } from "lucide-react";
+import { ArrowUp, Bot, Building2, Check, ChevronRight, CircleAlert, FileText, Loader2, Search, SquareTerminal, Waypoints } from "lucide-react";
 import SearchBar, { type ResearchMode } from "@/components/SearchBar";
 import EvidenceList from "@/components/EvidenceLayer";
 import Markdown from "@/components/Markdown";
 import VerificationBadge from "@/components/VerificationBadge";
 import DeveloperPanel from "@/components/DeveloperPanel";
+import EntityProfile from "@/components/EntityProfile";
 import {
   askQuestionStream,
   getEntityDetail,
   search,
-  type AskResponse,
   type AskStreamEvent,
+  type Citation,
+  type Derivation,
+  type Evidence,
+  type Fact,
   type EntityDetail,
   type SearchResult,
   type TraceSpan,
+  type Verification,
 } from "@/lib/api";
 
 const DEVTOOLS_KEY = "er:developer-view";
@@ -25,6 +30,13 @@ const SUGGESTIONS = [
   { label: "Trace ownership", query: "Who ultimately manages Albacore Partners I Master Fund?", mode: "agent" },
   { label: "Check status", query: "What is the registration status of Fred Alger Management?", mode: "agent" },
 ] as const;
+
+type AgentMessage = {
+  role: "user" | "assistant";
+  content: string;
+  citations?: Citation[];
+  verification?: Verification | null;
+};
 
 function Logo() {
   return <span className="query-logo"><Waypoints /></span>;
@@ -50,24 +62,6 @@ function SearchResults({ results, onOpen }: { results: SearchResult[]; onOpen: (
         );
       })}
     </div>
-  );
-}
-
-function EntityProfile({ detail, loading }: { detail: EntityDetail | null; loading: boolean }) {
-  if (!detail && !loading) return null;
-  if (loading) return <div id="entity-profile" className="entity-profile-loading"><Loader2 className="animate-spin" /> Opening entity profile…</div>;
-  if (!detail) return null;
-  return (
-    <section id="entity-profile" className="entity-profile">
-      <div className="entity-profile-heading"><span>Entity profile</span><a href={`https://search.gleif.org/#/search/lei/${detail.entity_id}`} target="_blank" rel="noreferrer">View in GLEIF ↗</a></div>
-      <h2>{detail.canonical_name}</h2>
-      <div className="entity-profile-grid">
-        <div><small>LEI</small><code>{detail.entity_id}</code></div>
-        <div><small>Status</small><p>{detail.entity_status ?? "—"}</p></div>
-        <div><small>Jurisdiction</small><p>{detail.jurisdiction ?? detail.legal_country ?? "—"}</p></div>
-        <div><small>Registration</small><p>{detail.lineage?.registration_status ?? "—"}</p></div>
-      </div>
-    </section>
   );
 }
 
@@ -131,7 +125,11 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
-  const [agentResult, setAgentResult] = useState<AskResponse | null>(null);
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
+  const [evidenceStore, setEvidenceStore] = useState<Record<string, Evidence>>({});
+  const [factStore, setFactStore] = useState<Record<string, Fact>>({});
+  const [derivationStore, setDerivationStore] = useState<Record<string, Derivation>>({});
+  const [followup, setFollowup] = useState("");
   const [events, setEvents] = useState<AskStreamEvent[]>([]);
   const [focusedEvidenceId, setFocusedEvidenceId] = useState<string | null>(null);
   const [detail, setDetail] = useState<EntityDetail | null>(null);
@@ -146,8 +144,10 @@ export default function Home() {
   const [traceError, setTraceError] = useState<string | null>(null);
   const [traceRunning, setTraceRunning] = useState(false);
 
-  // Restore the panel's open state - devtools stay open across reloads.
+  // Restore the panel's open state after hydration - devtools stay open across
+  // reloads, and localStorage doesn't exist during server render.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDevOpen(window.localStorage.getItem(DEVTOOLS_KEY) === "1");
   }, []);
 
@@ -155,14 +155,18 @@ export default function Home() {
     setDevOpen(next);
     window.localStorage.setItem(DEVTOOLS_KEY, next ? "1" : "0");
   }
-  const hasOutput = Boolean(error) || searchResults !== null || agentResult !== null;
-  const agentActive = mode === "agent" && (hasOutput || loading);
+  const hasOutput = Boolean(error) || searchResults !== null || agentMessages.length > 0;
+  const agentActive = mode === "agent" && (agentMessages.length > 0 || loading || Boolean(error));
 
   function changeMode(nextMode: ResearchMode) {
     setMode(nextMode);
     setError(null);
     setSearchResults(null);
-    setAgentResult(null);
+    setAgentMessages([]);
+    setEvidenceStore({});
+    setFactStore({});
+    setDerivationStore({});
+    setFollowup("");
     setEvents([]);
     setFocusedEvidenceId(null);
     setDetail(null);
@@ -173,12 +177,14 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setSearchResults(null);
-    setAgentResult(null);
     setEvents([]);
     setFocusedEvidenceId(null);
     setDetail(null);
     try {
       if (activeMode === "agent") {
+        const history = agentMessages.map(({ role, content }) => ({ role, content }));
+        setAgentMessages((previous) => [...previous, { role: "user", content: value }]);
+        setFollowup("");
         setTrace([]);
         setTraceQuestion(value);
         setTraceError(null);
@@ -198,10 +204,20 @@ export default function Home() {
               setEvents((previous) => [...previous, event]);
             }
           },
-          { trace: true },
+          { trace: true, history },
         );
-        setAgentResult(result);
+        setEvidenceStore((previous) => ({ ...previous, ...result.evidence }));
+        setFactStore((previous) => ({ ...previous, ...result.facts }));
+        setDerivationStore((previous) => ({ ...previous, ...result.derivations }));
+        setAgentMessages((previous) => [
+          ...previous,
+          { role: "assistant", content: result.answer, citations: result.citations, verification: result.verification },
+        ]);
       } else {
+        setAgentMessages([]);
+        setEvidenceStore({});
+        setFactStore({});
+        setDerivationStore({});
         setSearchResults((await search(value, "name")).results);
       }
     } catch (reason) {
@@ -236,6 +252,12 @@ export default function Home() {
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
+  function submitFollowup(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = followup.trim();
+    if (value && !loading) void runQuery(value, "agent");
+  }
+
   return (
     <main className={`query-app ${hasOutput || loading ? "has-output" : ""} ${agentActive ? "mode-agent" : ""} ${devOpen ? "dev-open" : ""}`}>
       <header className="query-header">
@@ -262,7 +284,9 @@ export default function Home() {
         </div>
 
         <div className="query-column">
-          <div className="query-composer"><SearchBar mode={mode} query={query} loading={loading} onModeChange={changeMode} onQueryChange={setQuery} onSubmit={runQuery} /></div>
+          {!(mode === "agent" && agentMessages.length > 0) && (
+            <div className="query-composer"><SearchBar mode={mode} query={query} loading={loading} onModeChange={changeMode} onQueryChange={setQuery} onSubmit={runQuery} /></div>
+          )}
 
           {!hasOutput && !loading && <div className="query-suggestions">
             {SUGGESTIONS.map((suggestion) => <button key={suggestion.label} type="button" onClick={() => runSuggestion(suggestion)}>
@@ -272,30 +296,51 @@ export default function Home() {
 
           {(hasOutput || loading) && <section className="query-output" aria-live="polite">
             {!loading && error && <div className="query-error"><CircleAlert /><div><strong>Request unavailable</strong><p>{error}</p></div></div>}
-            {!loading && !error && mode === "search" && searchResults && <><p className="output-label">{searchResults.length} entity {searchResults.length === 1 ? "match" : "matches"}</p><SearchResults results={searchResults} onOpen={(entityId) => void openEntity(entityId)} /><EntityProfile detail={detail} loading={detailLoading} /></>}
+            {!loading && !error && mode === "search" && searchResults && <><p className="output-label">{searchResults.length} entity {searchResults.length === 1 ? "match" : "matches"}</p><SearchResults results={searchResults} onOpen={(entityId) => void openEntity(entityId)} /><EntityProfile detail={detail} loading={detailLoading} onOpenEntity={(entityId) => void openEntity(entityId)} /></>}
 
-            {mode === "agent" && !error && (loading || agentResult) && <div className="conversation">
+            {mode === "agent" && (loading || agentMessages.length > 0) && <div className="conversation">
               <div className="conversation-main">
-                <div className="question-turn"><span>You</span><p>{query}</p></div>
-                {loading && <ResearchFeed events={events} />}
-                {!loading && agentResult && <div className="answer-turn">
-                  <div className="answer-avatar"><Logo /></div>
-                  <div className="answer-body">
-                    <span className="answer-label">Entity Intelligence <i>MCP</i></span>
-                    <Markdown content={agentResult.answer} citations={agentResult.citations} evidence={agentResult.evidence} onCitationClick={focusEvidence} />
-                    <VerificationBadge verification={agentResult.verification} />
+                {agentMessages.map((message, index) => message.role === "user" ? (
+                  <div key={index} className="question-turn"><span>You</span><p>{message.content}</p></div>
+                ) : (
+                  <div key={index} className="answer-turn">
+                    <div className="answer-avatar"><Logo /></div>
+                    <div className="answer-body">
+                      <span className="answer-label">Entity Intelligence <i>MCP</i></span>
+                      <Markdown content={message.content} citations={message.citations ?? []} evidence={evidenceStore} onCitationClick={focusEvidence} />
+                      <VerificationBadge verification={message.verification} />
+                    </div>
                   </div>
-                </div>}
+                ))}
+                {loading && <ResearchFeed events={events} />}
+                {!loading && error && <div className="query-error"><CircleAlert /><div><strong>Request unavailable</strong><p>{error}</p></div></div>}
+                <form className="followup-composer" onSubmit={submitFollowup}>
+                  <label className="sr-only" htmlFor="followup-question">Continue the conversation</label>
+                  <input
+                    id="followup-question"
+                    value={followup}
+                    onChange={(event) => setFollowup(event.target.value)}
+                    placeholder="Ask a follow-up…"
+                    autoComplete="off"
+                  />
+                  <button type="submit" disabled={loading || !followup.trim()} aria-label="Send follow-up">
+                    {loading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+                  </button>
+                </form>
               </div>
 
               <aside className="source-rail" ref={railRef} aria-label="Sources and method">
-                <div className="source-heading"><FileText /> Sources &amp; method {agentResult && <span>{Object.keys(agentResult.evidence).length}</span>}</div>
-                {agentResult
+                <div className="source-heading"><FileText /> Evidence ledger <span>{Object.keys(evidenceStore).length}</span></div>
+                {Object.keys(evidenceStore).length > 0
                   ? <EvidenceList
-                      evidence={agentResult.evidence}
+                      evidence={evidenceStore}
+                      facts={factStore}
+                      derivations={derivationStore}
                       focusedEvidenceId={focusedEvidenceId}
                       compact
-                      contexts={[{ answer: agentResult.answer, citations: agentResult.citations }]}
+                      contexts={agentMessages
+                        .filter((message) => message.role === "assistant")
+                        .map((message) => ({ answer: message.content, citations: message.citations ?? [] }))}
                     />
                   : <SourceSkeleton />}
               </aside>

@@ -233,10 +233,11 @@ def test_a_traced_run_emits_one_span_per_step_in_order(monkeypatch):
     assert result.citations[0].evidence_id == "ev_test"
 
 
-def test_the_trace_is_a_tree_of_turns_and_the_calls_they_requested(monkeypatch):
-    """Every tool call and submission nests under the model turn that asked
-    for it; turns and the verifier sit at the top level of the run. That is
-    the shape the Developer view draws."""
+def test_the_trace_is_a_flat_run_that_records_which_llm_call_asked_for_what(monkeypatch):
+    """One question is one turn: its LLM calls, tool calls, submission and
+    verification are sibling steps under the run, in order. `requested_by`
+    still records which LLM call asked for each tool call and submission -
+    provenance the Developer view shows, not nesting it draws."""
     _scripted_model(monkeypatch)
     _, events = _run(_FakeClient(), trace=True)
     spans = [event["span"] for event in events if event["type"] == "trace"]
@@ -244,15 +245,16 @@ def test_the_trace_is_a_tree_of_turns_and_the_calls_they_requested(monkeypatch):
     for span in spans:
         by_kind.setdefault(span["kind"], []).append(span)
 
-    turn_1, turn_2, turn_3 = by_kind["llm"]
+    llm_1, llm_2, llm_3 = by_kind["llm"]
     (tool,) = by_kind["tool"]
     (submit,) = by_kind["submit"]
     (verify,) = by_kind["verifier"]
 
-    assert [turn["parent_id"] for turn in (turn_1, turn_2, turn_3)] == [None, None, None]
-    assert verify["parent_id"] is None
-    assert tool["parent_id"] == turn_2["id"]      # turn 2 asked for search_entity
-    assert submit["parent_id"] == turn_3["id"]    # turn 3 asked to submit
+    assert all("parent_id" not in span for span in spans)
+    assert [span["requested_by"] for span in (llm_1, llm_2, llm_3, verify)] == [None, None, None, None]
+    assert tool["requested_by"] == llm_2["id"]      # the second call asked for search_entity
+    assert submit["requested_by"] == llm_3["id"]    # the third call asked to submit
+    assert [span["detail"]["iteration"] for span in (llm_1, llm_2, llm_3)] == [1, 2, 3]
 
 
 def test_an_untraced_run_emits_no_spans_at_all(monkeypatch):
