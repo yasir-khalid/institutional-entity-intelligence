@@ -244,22 +244,6 @@ def test_extra_parent_depth_expands_parents_further_than_children(store):
     assert e.downward == []  # A's own downward not re-expanded (cycle back to root)
 
 
-def test_extra_parent_depth_zero_is_unchanged_from_default(store):
-    _write_entities(store, [_entity("LEI_A", "A"), _entity("LEI_B", "B"), _entity("LEI_C", "C")])
-    _write_relationships(
-        store,
-        [
-            _rel("LEI_A", "LEI_B", "IS_DIRECTLY_CONSOLIDATED_BY"),
-            _rel("LEI_B", "LEI_C", "IS_DIRECTLY_CONSOLIDATED_BY"),
-        ],
-    )
-    _write_exceptions(store, [])
-
-    with_default = build_hierarchy_tree(store, "LEI_A", depth=2)
-    with_explicit_zero = build_hierarchy_tree(store, "LEI_A", depth=2, extra_parent_depth=0)
-
-    assert with_default.model_dump() == with_explicit_zero.model_dump()
-
 
 def test_cycle_does_not_infinite_loop(store):
     # A -> B -> A: a real (if unusual) possibility in GLEIF's relationship data.

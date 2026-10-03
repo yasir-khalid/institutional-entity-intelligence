@@ -101,7 +101,7 @@ entity_identifiers.parquet   every identifier any registered source has
 per source, each reading that source's own crosswalk/processed table and
 UNIONed together by `er.entity.build` - adding a new source's identifiers to
 every entity profile going forward is exactly one function + one line in that
-registry (see [`AGENTS.md`](../AGENTS.md)'s "Adding a new data source").
+registry.
 
 `er.cli.entity --name "..."` (or `--lei`) is the resulting single "tell me about
 this institution" view: canonical identity, every attached identifier, the
@@ -133,8 +133,7 @@ argument parsing and terminal rendering - no core package it calls
 (`er.matching`, `er.entity`, `er.family`, `er.graph`, `er.datasources`, ...)
 imports `argparse` or `rich`. This keeps every core package usable by a future
 non-terminal consumer (an API, a notebook) and keeps each testable without a
-live service or a captured terminal. See [`AGENTS.md`](../AGENTS.md)'s "CLI
-separation" section for the exact pattern to follow when adding a new command.
+live service or a captured terminal.
 
 ## Evaluation
 

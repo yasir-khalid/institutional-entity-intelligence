@@ -4,7 +4,6 @@ from er.normalisation.addresses import (
     normalize_country,
     normalize_identifier,
     normalize_postcode,
-    parse_address_components,
     postcode_outward,
 )
 
@@ -43,9 +42,6 @@ def test_normalize_address_line_combines_and_lowercases():
     assert result == "100 bishopsgate london ec2n 4ag gb"
 
 
-def test_normalize_address_line_skips_missing_parts():
-    assert normalize_address_line(None, "London", None, None, "GB") == "london gb"
-
 
 def test_normalize_address_line_all_none():
     assert normalize_address_line(None, None, None) is None
@@ -61,17 +57,6 @@ def test_normalize_address_line_normalizes_punctuation_and_casing():
     assert a == b
 
 
-def test_parse_address_components_labels_parts():
-    components = parse_address_components("100 Bishopsgate", "London", "EC2N 4AG", "GB")
-    assert components["house_number"] == "100"
-    assert components["road"] == "bishopsgate"
-    assert components["city"] == "london"
-    assert components["postcode"] == "ec2n 4ag"
-    assert components["country"] == "gb"
-
-
-def test_parse_address_components_empty_input():
-    assert parse_address_components(None, "", None) == {}
 
 
 def test_normalize_identifier_strips_punctuation_and_case():

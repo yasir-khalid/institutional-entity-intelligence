@@ -66,8 +66,8 @@ request-level flow and [`docs/phases.md`](docs/phases.md) for the build history.
 the canonical entity layer's code — you write that source's own `ingest.py`
 under `src/er/datasources/<source>/`, a crosswalk resolving its records to a
 GLEIF LEI via the existing `er.matching.matcher.match()`, and one SQL-returning
-function in `src/er/entity/sources.py` pointing at your crosswalk's output. See
-[`AGENTS.md`](AGENTS.md) for the exact steps.
+function in `src/er/entity/sources.py` pointing at your crosswalk's output,
+then rebuild and `make publish`.
 
 ## Data sources
 
@@ -343,6 +343,5 @@ those packages, never the other way around. This keeps core logic usable by a
 future API/notebook without dragging in display code, and testable without a
 live service.
 
-More detail: [`AGENTS.md`](AGENTS.md) (repo map + design decisions for anyone —
-human or agent — working in this codebase), [`docs/architecture.md`](docs/architecture.md),
+More detail: [`docs/architecture.md`](docs/architecture.md),
 [`docs/phases.md`](docs/phases.md), [`experiments/README.md`](experiments/README.md).

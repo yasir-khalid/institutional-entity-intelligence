@@ -63,12 +63,6 @@ def test_minimum_should_match_is_one_regardless_of_country():
     assert without_country["query"]["bool"]["minimum_should_match"] == 1
 
 
-def test_country_is_uppercased():
-    body = build_candidate_query("Acme Corp", "gb", size=20)
-    should = _name_should_clauses(body)
-    country_clauses = [c for c in should if "term" in c and "legal_country" in c["term"]]
-    assert country_clauses[0]["term"]["legal_country"]["value"] == "GB"
-
 
 def test_compact_name_clause_matches_space_stripped_query():
     # Regression test / experiment 001: a glued query like "fnbbank" tokenizes to
@@ -88,7 +82,7 @@ def test_country_aliases_are_normalized():
     # "UK"/"United Kingdom" don't exist in GLEIF's stored data (which uses ISO
     # alpha-2 "GB") - without alias resolution, --country UK would silently fail to
     # narrow anything at all.
-    for alias in ["UK", "United Kingdom", "great britain"]:
+    for alias in ["gb", "UK", "United Kingdom", "great britain"]:
         body = build_candidate_query("Acme Corp", alias, size=20)
         should = _name_should_clauses(body)
         country_clauses = [c for c in should if "term" in c and "legal_country" in c["term"]]

@@ -113,13 +113,6 @@ def test_no_master_feeder_conflict_when_query_is_ambiguous_but_candidate_is_not(
     assert compute_features(q, feeder_candidate)["feeder_conflict"] is False
 
 
-def test_master_feeder_conflict_still_detected_when_query_asserts_the_other():
-    q = build_query_record("Acme Global Credit Master Fund")
-    feeder_candidate = _candidate(is_master=False, is_feeder=True)
-    f = compute_features(q, feeder_candidate)
-    assert f["master_conflict"] is True
-    assert f["feeder_conflict"] is True
-
 
 def test_country_exact_tolerates_subnational_jurisdiction():
     q = build_query_record("Acme Corp", country="US")

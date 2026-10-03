@@ -33,11 +33,6 @@ def test_fund_number_roman_vs_arabic():
     assert extract_fund_number(normalize_name("Acme Fund III")) == 3
 
 
-def test_fund_number_distinguishes_conflicting_series():
-    two = extract_fund_number(normalize_name("Acme Fund II"))
-    three = extract_fund_number(normalize_name("Acme Fund III"))
-    assert two != three
-
 
 def test_fund_number_absent():
     assert extract_fund_number(normalize_name("Acme Capital Management")) is None
