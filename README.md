@@ -14,33 +14,111 @@ serving projections used by deployed API, CLI, and agent reads.
 ## How it works
 
 ```mermaid
-flowchart TB
-    subgraph sources["Data sources (each owns its own ETL)"]
-        GLEIF["GLEIF LEI data\n(3.4M entities)"]
-        SEC13F["SEC Form 13F\n(institutional filings)"]
-        SECREF["SEC reference data\n(submissions, funds, insiders)"]
-    end
+erDiagram
+    GLEIF_LEI {
+        string lei PK "the global spine"
+        string legal_name "thousands of near-identical fund names"
+        string registration_id "local register number"
+        string accounting_parent "consolidation, not control or ownership"
+        string exception_reason "why a parent is missing"
+        missing cik "no SEC identifier on the record"
+        missing holdings "no holdings, stakes or filings"
+    }
+    GLEIF_ISIN_MAP {
+        string isin PK
+        string lei FK "stated by GLEIF"
+    }
+    SEC_13F {
+        string filer_cik PK "SEC-only number"
+        string filer_name "free text, renamed over time"
+        string cusip FK "a security, not its issuer"
+        string issuer_name "free text"
+        number value "in thousands before 3 Jan 2023"
+        string put_call "options, not long positions"
+        missing lei "never reported"
+        missing group_parent "one group files under many CIKs"
+    }
+    SEC_SUBMISSIONS {
+        string cik PK
+        string name "plus former names - helps the match"
+        string address
+        string sic
+        missing lei "no LEI field"
+    }
+    SEC_13DG {
+        string issuer_cik FK
+        string issuer_cusip FK
+        string reporting_person_cik FK "absent on 13.5k of 21.7k rows"
+        number percent_of_class
+        number voting_power
+        date event_date "structured XML only since Dec 2024"
+    }
+    SEC_INSIDERS {
+        string owner_cik FK "mostly people - no LEI exists"
+        string issuer_cik FK
+        string role "officer, director, 10 pct owner"
+    }
+    SEC_SERIES_CLASS {
+        string registrant_cik FK
+        string series_id PK "SEC-only"
+        string class_id "SEC-only"
+        string ticker
+        missing lei "no LEI"
+    }
+    SEC_NPORT {
+        string registrant_cik FK
+        string registrant_lei FK "stated by the filer"
+        string series_id FK
+        string series_lei FK "13537 of 13548 found in GLEIF"
+        string issuer_cusip FK
+        string issuer_lei FK
+        number net_assets "registered funds only"
+    }
+    OPENFIGI {
+        string figi PK
+        string cusip FK
+        string ticker
+        string security_type
+        missing issuer_lei "describes the security, not who issued it"
+    }
+    SEC_ADV {
+        string crd_number PK "carried by no other source here"
+        string firm_name
+        text page_text "unstructured PDF pages"
+        missing cik "no CIK or LEI"
+    }
+    COMPANIES_HOUSE {
+        string company_number PK "UK-only"
+        string company_name
+        string status
+        missing lei "equals a GLEIF registration ID for 101.8k of 5.7M"
+    }
+    UK_PSC {
+        string company_number FK
+        string name "individuals have no identifier"
+        string natures_of_control "e.g. 25-50 pct of shares"
+        date ceased_on
+    }
+    FFIEC_NIC {
+        string rssd_id PK "Fed-only"
+        string lei "only on some records"
+        string parent_rssd_id "bank control, with equity pct"
+        string successor_rssd_id "mergers"
+    }
 
-    GLEIF --> ingest["Ingest\n(streaming parse -> Parquet)"]
-    SEC13F --> ingest
-    SECREF --> ingest
-
-    ingest --> parquet[("Parquet\nsystem of record")]
-    parquet --> index["OpenSearch indexes\n(candidate retrieval + serving projections)"]
-
-    query["Messy query name"] --> retrieve
-    index --> retrieve["Retrieve\ncandidate pool"]
-    retrieve --> score["Score\nexplainable features"]
-    score --> decide["Decide\nAUTO_MATCH / REVIEW / UNMATCHED"]
-
-    decide --> crosswalk["Crosswalk\n(source record -> GLEIF LEI)"]
-    parquet --> crosswalk
-
-    crosswalk --> canonical["Canonical entity layer\nentities + entity_identifiers\n(one entity, many sources)"]
-    parquet --> canonical
-
-    canonical --> profile["er.entity\none profile: identity + IDs +\nrelationships + SEC activity"]
-    canonical --> hierarchy["er.hierarchy / er.family\nGLEIF relationships"]
+    GLEIF_ISIN_MAP }o--|| GLEIF_LEI : "LEI"
+    SEC_13F }o..o| GLEIF_LEI : "NO SHARED KEY - CIK resolved by name match"
+    SEC_13F }o--o| SEC_SUBMISSIONS : "CIK"
+    SEC_13F }o--o| OPENFIGI : "CUSIP"
+    SEC_13DG }o--o| SEC_SUBMISSIONS : "issuer CIK"
+    SEC_INSIDERS }o--o| SEC_SUBMISSIONS : "issuer CIK"
+    SEC_SERIES_CLASS }o--o| SEC_SUBMISSIONS : "registrant CIK"
+    SEC_NPORT }o--o| SEC_SERIES_CLASS : "series ID"
+    SEC_NPORT }o--o| GLEIF_LEI : "LEIs the filing states"
+    SEC_ADV |o..o| GLEIF_LEI : "NO KEY - CRD appears nowhere else"
+    COMPANIES_HOUSE |o..o| GLEIF_LEI : "registration ID, partial"
+    UK_PSC }o--|| COMPANIES_HOUSE : "company number"
+    FFIEC_NIC |o..o| GLEIF_LEI : "LEI, only on some records"
 ```
 
 The answer path is deliberately narrower:
