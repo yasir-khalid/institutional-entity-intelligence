@@ -151,3 +151,37 @@ optimizes against), and a `failure_breakdown` that categorizes every row into
 `correctly_deferred` — so a retrieval bug and a scoring-threshold problem are
 never conflated. See [`experiments/README.md`](../experiments/README.md) for the
 ongoing, proof-backed log of techniques tried against this benchmark.
+
+## Repo layout
+
+```
+src/er/
+├── cli/                    # every CLI (python -m er.cli.<name>) - argument
+│                             parsing + rendering only, never core logic
+├── datasources/<source>/   # one folder per data source, owns its own ETL end to end
+├── normalisation/          # pure name/address/country normalization
+├── retrieval/              # OpenSearch query building + candidate search
+├── matching/               # features -> score -> decision (er.cli.match)
+├── family/                 # brand/family discovery logic (er.cli.family)
+├── graph/                  # relationship hierarchy logic (er.cli.hierarchy)
+├── knowledge/              # typed cross-source nodes, edges, identifiers, facts
+├── crosswalk/              # resolve another source's records to a GLEIF LEI
+├── entity/                 # canonical entity layer: one entity, identifiers
+│                             from every source (er.cli.entity) - see sources.py
+│                             to add a new source's identifiers with one function
+├── agent/                  # entity Q&A: a standalone MCP server (search_entity,
+│                             get_entity_profile, get_relationship_hierarchy,
+│                             position history, 13D/G owners, ADV brochures)
+│                             plus an OpenRouter tool-calling orchestrator that
+│                             is genuinely wired to it over the MCP protocol
+│                             (er.cli.mcp_server, er.cli.ask) - every tool
+│                             returns deterministic Evidence, not RAG chunks,
+│                             and verifier.py checks the finished answer
+│                             against those tool results with a decision model
+├── evaluation/             # benchmark scoring + failure-analysis metrics, and
+│                             hard-path checks on agent answers (agent_eval.py)
+└── benchmark/              # auto-generated evaluation pairs
+
+experiments/   # proof-backed retrieval/scoring experiments (VALIDATED/INVALIDATED)
+docs/          # architecture detail, full phase-by-phase build history
+```
