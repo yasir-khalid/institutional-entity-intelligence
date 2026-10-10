@@ -1,0 +1,14 @@
+.figure { margin: 2.25rem 0 3rem; }
+.frame { position: relative; }
+.stage { overflow: hidden; border: 1px solid #e4e1dc; border-radius: 16px; background: #fff; padding: 1.35rem 1.5rem; }
+.figure figcaption { margin-top: .65rem; color: #6f6c6a; font-size: .7rem; line-height: 1.5; }
+.playBadge { position: absolute; top: .65rem; right: .65rem; display: grid; width: 1.85rem; height: 1.85rem; place-items: center; border: 1px solid #e4e1dc; border-radius: 999px; background: rgba(255,255,255,.94); color: #c72f08; cursor: pointer; transition: border-color .15s ease, color .15s ease; }
+.playBadge:hover { border-color: #aaa6a0; color: #191818; }
+.playBadge:focus-visible { outline: 2px solid #c72f08; outline-offset: 2px; }
+.playBadge svg { width: .75rem; height: .75rem; }
+.equalizer { display: flex; height: .75rem; align-items: flex-end; gap: 2px; }
+.equalizer i { display: block; width: 2px; border-radius: 2px; background: currentColor; animation: equalize .75s ease-in-out infinite alternate; }
+.equalizer i:nth-child(1) { height: 45%; }.equalizer i:nth-child(2) { height: 100%; animation-delay: -.22s; }.equalizer i:nth-child(3) { height: 68%; animation-delay: -.44s; }
+@keyframes equalize { to { height: 25%; } }
+@media (max-width: 640px) { .stage { padding: 1rem .7rem; }.figure { margin: 1.75rem 0 2.5rem; } }
+@media (prefers-reduced-motion: reduce) { .equalizer i { animation: none; } }

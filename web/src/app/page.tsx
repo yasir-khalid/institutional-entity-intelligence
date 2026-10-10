@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, Bot, Building2, Check, ChevronRight, CircleAlert, FileText, Loader2, Search, SquareTerminal, Waypoints } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, ArrowUp, Bot, Building2, Check, CircleAlert, FileText, Loader2, Search, SquareTerminal, Waypoints } from "lucide-react";
 import SearchBar, { type ResearchMode } from "@/components/SearchBar";
 import EvidenceList from "@/components/EvidenceLayer";
 import Markdown from "@/components/Markdown";
@@ -25,10 +26,36 @@ import {
 
 const DEVTOOLS_KEY = "er:developer-view";
 
-const SUGGESTIONS = [
-  { label: "Find an entity", query: "Point72", mode: "search" },
+type Suggestion = { label: string; query: string; mode: ResearchMode };
+
+const SEARCH_SUGGESTIONS: Suggestion[] = [
+  { label: "Find a manager", query: "Point72", mode: "search" },
+  { label: "Find a fund", query: "BlackRock", mode: "search" },
+  { label: "Find an issuer", query: "Apple Inc.", mode: "search" },
+];
+
+const AGENT_SUGGESTIONS: Suggestion[] = [
   { label: "Trace ownership", query: "Who ultimately manages Albacore Partners I Master Fund?", mode: "agent" },
   { label: "Check status", query: "What is the registration status of Fred Alger Management?", mode: "agent" },
+  { label: "Compare holdings", query: "What was Point72's latest reported holding in Apple?", mode: "agent" },
+];
+
+// The landing page names the primary registers and disclosures that the
+// platform joins. They are deliberately text rather than third-party logos:
+// the treatment reads as research coverage, not as an endorsement by any of
+// the source organisations.
+const RESEARCH_SOURCES = [
+  "GLEIF LEI",
+  "SEC 13F",
+  "SEC 13D/G",
+  "SEC Forms 3/4/5",
+  "SEC series & class",
+  "EDGAR submissions",
+  "SEC N-PORT",
+  "OpenFIGI",
+  "SEC Form ADV",
+  "Companies House",
+  "FFIEC NIC",
 ] as const;
 
 type AgentMessage = {
@@ -42,25 +69,56 @@ function Logo() {
   return <span className="query-logo"><Waypoints /></span>;
 }
 
-function SearchResults({ results, onOpen }: { results: SearchResult[]; onOpen: (entityId: string) => void }) {
+function SearchResults({
+  results,
+  selectedEntityId,
+  onSelect,
+}: {
+  results: SearchResult[];
+  selectedEntityId: string | null;
+  onSelect: (entityId: string) => void;
+}) {
   if (!results.length) return <EmptyState icon={<Search />} title="No matching entities" text="Try a legal name, jurisdiction, LEI, or CUSIP." />;
   return (
     <div className="candidate-list">
-      {results.map((result) => {
-        const status = result.decision === "AUTO_MATCH" ? "Resolved" : result.decision === "REVIEW" ? "Review" : "Candidate";
-        return (
-          <a key={result.entity_id} href="#entity-profile" onClick={() => onOpen(result.entity_id)} className="candidate-row">
-            <span className="candidate-icon"><Building2 /></span>
-            <div className="candidate-main">
-              <h3>{result.canonical_name}</h3>
-              <p>{result.jurisdiction ?? result.legal_country ?? "Jurisdiction unavailable"}</p>
-              <span className="candidate-id">{result.entity_id}</span>
-            </div>
-            <span className={`candidate-status ${status.toLowerCase()}`}>{status}</span>
-            <ChevronRight className="candidate-arrow" />
-          </a>
-        );
-      })}
+      <table>
+        <caption className="sr-only">Entity matches. Select a row to inspect its profile.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Entity</th>
+            <th scope="col">Jurisdiction</th>
+            <th scope="col">LEI</th>
+            <th scope="col">Match</th>
+          </tr>
+        </thead>
+        <tbody>
+          {results.map((result) => {
+            const status = result.decision === "AUTO_MATCH" ? "Resolved" : result.decision === "REVIEW" ? "Review" : "Candidate";
+            const selected = result.entity_id === selectedEntityId;
+            return (
+              <tr key={result.entity_id} className={selected ? "is-selected" : ""}>
+                <td>
+                  <button
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => onSelect(result.entity_id)}
+                    className="candidate-row-select"
+                  >
+                    <span className="candidate-icon"><Building2 /></span>
+                    <span className="candidate-main">
+                      <strong>{result.canonical_name}</strong>
+                      <small>{selected ? "Viewing profile" : "View profile"}</small>
+                    </span>
+                  </button>
+                </td>
+                <td className="candidate-jurisdiction">{result.jurisdiction ?? result.legal_country ?? "Unavailable"}</td>
+                <td><code className="candidate-id">{result.entity_id}</code></td>
+                <td><span className={`candidate-status ${status.toLowerCase()}`}>{status}</span></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -125,6 +183,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [evidenceStore, setEvidenceStore] = useState<Record<string, Evidence>>({});
   const [factStore, setFactStore] = useState<Record<string, Fact>>({});
@@ -135,6 +194,7 @@ export default function Home() {
   const [detail, setDetail] = useState<EntityDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const railRef = useRef<HTMLElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
   // Developer view. The trace belongs to the last *agent* run and outlives a
   // mode switch on purpose: you notice something odd, flip to Search to check
   // an entity, and the trace you were debugging is still there.
@@ -157,11 +217,26 @@ export default function Home() {
   }
   const hasOutput = Boolean(error) || searchResults !== null || agentMessages.length > 0;
   const agentActive = mode === "agent" && (agentMessages.length > 0 || loading || Boolean(error));
+  const searchActive = mode === "search" && (loading || searchResults !== null || Boolean(error));
+  const canFollowUp = agentMessages.some((message) => message.role === "assistant") && !loading;
+  const suggestions = mode === "agent" ? AGENT_SUGGESTIONS : SEARCH_SUGGESTIONS;
+
+  // The thread is its own scrolling region, like a chat application. New
+  // status updates and the completed answer stay in view above the composer
+  // instead of pushing the input below the browser fold.
+  useEffect(() => {
+    if (!agentActive) return;
+    const frame = window.requestAnimationFrame(() => {
+      threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [agentActive, agentMessages, error, events, loading]);
 
   function changeMode(nextMode: ResearchMode) {
     setMode(nextMode);
     setError(null);
     setSearchResults(null);
+    setSelectedEntityId(null);
     setAgentMessages([]);
     setEvidenceStore({});
     setFactStore({});
@@ -173,10 +248,12 @@ export default function Home() {
   }
 
   async function runQuery(value: string, activeMode = mode) {
+    if (loading) return;
     setQuery(value);
     setLoading(true);
     setError(null);
     setSearchResults(null);
+    setSelectedEntityId(null);
     setEvents([]);
     setFocusedEvidenceId(null);
     setDetail(null);
@@ -218,7 +295,9 @@ export default function Home() {
         setEvidenceStore({});
         setFactStore({});
         setDerivationStore({});
-        setSearchResults((await search(value, "name")).results);
+        const results = (await search(value, "name")).results;
+        setSearchResults(results);
+        if (results[0]) void openEntity(results[0].entity_id);
       }
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "We couldn’t complete that request.";
@@ -230,12 +309,13 @@ export default function Home() {
     }
   }
 
-  function runSuggestion(suggestion: (typeof SUGGESTIONS)[number]) {
+  function runSuggestion(suggestion: Suggestion) {
     changeMode(suggestion.mode);
     void runQuery(suggestion.query, suggestion.mode);
   }
 
   async function openEntity(entityId: string) {
+    setSelectedEntityId(entityId);
     setDetailLoading(true);
     try {
       setDetail(await getEntityDetail(entityId));
@@ -259,7 +339,7 @@ export default function Home() {
   }
 
   return (
-    <main className={`query-app ${hasOutput || loading ? "has-output" : ""} ${agentActive ? "mode-agent" : ""} ${devOpen ? "dev-open" : ""}`}>
+    <main className={`query-app ${hasOutput || loading ? "has-output" : ""} ${searchResults ? "has-search-results" : ""} ${searchActive ? "search-active" : ""} ${agentActive ? "mode-agent" : ""} ${devOpen ? "dev-open" : ""}`}>
       <header className="query-header">
         <a href="#top" className="query-brand" aria-label="Entity Intelligence home"><Logo /><span>Entity intelligence</span></a>
         <div className="query-header-actions">
@@ -281,56 +361,121 @@ export default function Home() {
           <p>Institutional entity intelligence</p>
           <h1>What do you want to know?</h1>
           <span>Resolve legal entities, inspect relationships, and trace the evidence behind the answer.</span>
+          <Link href="/how-it-works" className="how-it-works-link">How it works <ArrowRight aria-hidden="true" /></Link>
         </div>
 
         <div className="query-column">
-          {!(mode === "agent" && agentMessages.length > 0) && (
-            <div className="query-composer"><SearchBar mode={mode} query={query} loading={loading} onModeChange={changeMode} onQueryChange={setQuery} onSubmit={runQuery} /></div>
+          {!searchActive && !(mode === "agent" && agentMessages.length > 0) && (
+            <div className="query-composer"><SearchBar mode={mode} query={query} loading={loading} onModeChange={changeMode} onQueryChange={setQuery} onSubmit={runQuery} variant={mode === "search" && (searchResults !== null || loading || Boolean(error)) ? "inline" : "landing"} /></div>
           )}
 
-          {!hasOutput && !loading && <div className="query-suggestions">
-            {SUGGESTIONS.map((suggestion) => <button key={suggestion.label} type="button" onClick={() => runSuggestion(suggestion)}>
-              <span>{suggestion.mode === "agent" ? <Bot /> : <Search />}</span><div><small>{suggestion.label}</small><p>{suggestion.query}</p></div>
-            </button>)}
-          </div>}
+          {!hasOutput && !loading && (
+            <section className="source-marquee" aria-label="Research sources">
+              <span className="source-marquee-label">Research spans</span>
+              <div className="source-marquee-window">
+                <div className="source-marquee-track">
+                  <div className="source-marquee-list" role="list">
+                    {RESEARCH_SOURCES.map((source) => <span key={source} role="listitem">{source}</span>)}
+                  </div>
+                  <div className="source-marquee-list" aria-hidden="true">
+                    {RESEARCH_SOURCES.map((source) => <span key={source}>{source}</span>)}
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
 
-          {(hasOutput || loading) && <section className="query-output" aria-live="polite">
-            {!loading && error && <div className="query-error"><CircleAlert /><div><strong>Request unavailable</strong><p>{error}</p></div></div>}
-            {!loading && !error && mode === "search" && searchResults && <><p className="output-label">{searchResults.length} entity {searchResults.length === 1 ? "match" : "matches"}</p><SearchResults results={searchResults} onOpen={(entityId) => void openEntity(entityId)} /><EntityProfile detail={detail} loading={detailLoading} onOpenEntity={(entityId) => void openEntity(entityId)} /></>}
+          {!hasOutput && !loading && <section className="query-suggestion-block" aria-label={mode === "agent" ? "Suggested research questions" : "Suggested searches"}>
+            <p>{mode === "agent" ? "Suggested research questions" : "Suggested searches"}</p>
+            <div className={`query-suggestions ${mode === "agent" ? "is-agent" : ""}`}>
+              {suggestions.map((suggestion) => <button key={suggestion.label} type="button" onClick={() => runSuggestion(suggestion)}>
+                <span>{suggestion.mode === "agent" ? <Bot /> : <Search />}</span><div><small>{suggestion.label}</small><p>{suggestion.query}</p></div>
+              </button>)}
+            </div>
+          </section>}
+
+          {searchActive && <section className="search-shell" aria-label="Entity search workspace">
+            <header className="search-command-pane">
+              <div className="search-command-copy">
+                <span>Entity search</span>
+                <p>Resolve a name or identifier, then inspect the selected record.</p>
+              </div>
+              <div className="query-composer">
+                <SearchBar mode="search" query={query} loading={loading} onModeChange={changeMode} onQueryChange={setQuery} onSubmit={runQuery} variant="inline" />
+              </div>
+            </header>
+
+            <div className="search-workspace">
+              <section className="search-list-pane" aria-label="Entity matches" aria-live="polite">
+                <div className="search-results-heading">
+                  <div>
+                    <p className="output-label">Entity matches</p>
+                    <h2>{loading ? "Searching…" : `${searchResults?.length ?? 0} result${searchResults?.length === 1 ? "" : "s"}`}</h2>
+                  </div>
+                  <p>{loading ? "Resolving candidates" : "Select a row to inspect its profile."}</p>
+                </div>
+                <div className="search-list-scroll">
+                  {loading && <div className="query-loading"><Loader2 className="animate-spin" /> Searching entity records…</div>}
+                  {!loading && error && <div className="query-error"><CircleAlert /><div><strong>Request unavailable</strong><p>{error}</p></div></div>}
+                  {!loading && !error && searchResults && <SearchResults results={searchResults} selectedEntityId={selectedEntityId} onSelect={(entityId) => void openEntity(entityId)} />}
+                </div>
+              </section>
+
+              <aside className="search-detail-pane" aria-label="Selected entity profile" aria-live="polite">
+                <div className="search-selection-heading">
+                  <span>Selected record</span>
+                  <small>{detail?.canonical_name ?? (detailLoading ? "Opening profile…" : "No entity selected")}</small>
+                </div>
+                <div className="search-detail-scroll">
+                  <EntityProfile detail={detail} loading={detailLoading} onOpenEntity={(entityId) => void openEntity(entityId)} />
+                  {!detailLoading && !detail && <EmptyState icon={<Building2 />} title="Select an entity" text="Choose a result to inspect its identifiers, relationships, and filings." />}
+                </div>
+              </aside>
+            </div>
+          </section>}
+
+          {(hasOutput || loading) && !searchActive && <section className="query-output" aria-live="polite">
 
             {mode === "agent" && (loading || agentMessages.length > 0) && <div className="conversation">
               <div className="conversation-main">
+                <div className="conversation-thread" ref={threadRef} aria-live="polite">
                 {agentMessages.map((message, index) => message.role === "user" ? (
                   <div key={index} className="question-turn"><span>You</span><p>{message.content}</p></div>
                 ) : (
                   <div key={index} className="answer-turn">
                     <div className="answer-avatar"><Logo /></div>
                     <div className="answer-body">
-                      <span className="answer-label">Entity Intelligence <i>MCP</i></span>
+                      <span className="answer-label">Researched answer <i>Source-backed</i></span>
                       <Markdown content={message.content} citations={message.citations ?? []} evidence={evidenceStore} onCitationClick={focusEvidence} />
                       <VerificationBadge verification={message.verification} />
                     </div>
                   </div>
                 ))}
                 {loading && <ResearchFeed events={events} />}
-                {!loading && error && <div className="query-error"><CircleAlert /><div><strong>Request unavailable</strong><p>{error}</p></div></div>}
+                {!loading && error && <div className="query-error"><CircleAlert /><div><strong>Request unavailable</strong><p>{error}</p><button type="button" onClick={() => void runQuery(query, "agent")}>Try again</button></div></div>}
+                </div>
                 <form className="followup-composer" onSubmit={submitFollowup}>
                   <label className="sr-only" htmlFor="followup-question">Continue the conversation</label>
                   <input
                     id="followup-question"
                     value={followup}
                     onChange={(event) => setFollowup(event.target.value)}
-                    placeholder="Ask a follow-up…"
+                    disabled={!canFollowUp}
+                    placeholder={loading ? "Researching the response…" : canFollowUp ? "Ask a follow-up…" : "Wait for the response before continuing…"}
                     autoComplete="off"
                   />
-                  <button type="submit" disabled={loading || !followup.trim()} aria-label="Send follow-up">
+                  <div className="followup-toolbar" aria-hidden="true">
+                    <span className="followup-tool"><Search /> Research</span>
+                    <span className="followup-note">Answers cite source records</span>
+                  </div>
+                  <button type="submit" disabled={!canFollowUp || !followup.trim()} aria-label={loading ? "Research in progress" : "Send follow-up"}>
                     {loading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
                   </button>
                 </form>
               </div>
 
               <aside className="source-rail" ref={railRef} aria-label="Sources and method">
-                <div className="source-heading"><FileText /> Evidence ledger <span>{Object.keys(evidenceStore).length}</span></div>
+                <div className="source-heading"><FileText /><strong>Sources</strong><span>{Object.keys(evidenceStore).length}</span></div>
                 {Object.keys(evidenceStore).length > 0
                   ? <EvidenceList
                       evidence={evidenceStore}

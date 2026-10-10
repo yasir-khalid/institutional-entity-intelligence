@@ -318,6 +318,15 @@ class AppConfig(BaseModel):
     def openfigi_api_key(self) -> str | None:
         return os.environ.get("OPENFIGI_API_KEY")
 
+    @property
+    def a2a_public_url(self) -> str:
+        # Where other agents reach the API - advertised in the A2A agent card.
+        return os.environ.get("A2A_PUBLIC_URL", "http://localhost:8000")
+
+    @property
+    def a2a_api_key(self) -> str | None:
+        return os.environ.get("A2A_API_KEY") or None
+
 
 @lru_cache
 def load_config(path: str | Path = REPO_ROOT / "config" / "dev.yaml") -> AppConfig:

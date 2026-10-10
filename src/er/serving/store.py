@@ -25,6 +25,8 @@ ENTITIES = "entities"
 FILERS = "13f_filers"
 HOLDINGS = "13f_holdings"
 NPORT_FUNDS = "nport_funds"
+FUND_SERIES = "fund_series"
+SECURITIES = "securities"
 RELATIONSHIPS = "gleif_relationships"
 OWNERSHIP = "13dg_ownership"
 ADV_DOCUMENTS = "sec_adv_documents"
@@ -208,7 +210,11 @@ class MemoryStore:
         self, index, *, where=None, either=None, missing=(), sort=(), size=100, collapse=None, fields=()
     ) -> list[dict]:
         def matches(doc: dict, field: str, value: Any) -> bool:
-            return doc.get(field) in value if isinstance(value, list) else doc.get(field) == value
+            # A term query on an array field matches any element, as in OpenSearch.
+            present = doc.get(field)
+            candidates = present if isinstance(present, list) else [present]
+            wanted = value if isinstance(value, list) else [value]
+            return any(candidate in wanted for candidate in candidates)
 
         hits = [
             doc

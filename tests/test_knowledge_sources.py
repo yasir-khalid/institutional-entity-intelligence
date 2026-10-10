@@ -60,28 +60,27 @@ def test_series_and_classes_remain_distinct_graph_nodes(tmp_path):
     }
 
 
-def test_ambiguous_openfigi_mapping_does_not_create_same_as_edge(tmp_path):
+def test_openfigi_links_a_cusip_only_when_its_listings_share_one_security(tmp_path):
+    # One FIGI per exchange listing, all with one share-class FIGI, is one
+    # security; two unrelated FIGIs for one CUSIP is ambiguous and unlinked.
     cfg = _isolated_config(tmp_path)
     cfg.openfigi.raw_dir.mkdir(parents=True)
+    listing = {"name": "Acme Corp", "shareClassFIGI": "BBG00CLASS01"}
     cache = {
         "requested_at": "2026-10-02T12:00:00+00:00",
-        "jobs": [{"idType": "ID_CUSIP", "idValue": "123456789"}],
+        "jobs": [{"idType": "ID_CUSIP", "idValue": "123456789"}, {"idType": "ID_CUSIP", "idValue": "987654321"}],
         "responses": [
-            {
-                "data": [
-                    {"figi": "BBG000000001", "name": "Class A"},
-                    {"figi": "BBG000000002", "name": "Class B"},
-                ]
-            }
+            {"data": [{**listing, "figi": "BBG00LIST001", "exchCode": "US"}, {**listing, "figi": "BBG00LIST002", "exchCode": "UN"}]},
+            {"data": [{"figi": "BBG000000001", "name": "Class A"}, {"figi": "BBG000000002", "name": "Class B"}]},
         ],
     }
     (cfg.openfigi.raw_dir / "mapping-example.json").write_text(json.dumps(cache))
 
-    assert build_mappings(cfg) == 2
-    counts = run_all(cfg)
+    assert build_mappings(cfg) == 4
+    run_all(cfg)
 
-    assert counts["nodes"] == 2
-    assert counts["edges"] == 0
+    edges = _rows(cfg.entity.processed_dir / "knowledge_edges.parquet", "start_node_id, end_node_id")
+    assert edges == {("security:cusip:123456789", "figi:BBG00CLASS01")}
 
 
 def _rows(path, columns):

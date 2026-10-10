@@ -18,10 +18,12 @@ from urllib.parse import quote
 from er.config import AppConfig
 from er.datasources.sec_adv.search import search_pages
 from er.entity.connections import load_connections
+from er.entity.funds import FUND_ID_TYPES, load_fund_series
 from er.entity.models import NPortFundReport
 from er.entity.ownership import load_beneficial_owners
 from er.entity.positions import load_position_rows
 from er.entity.profile import get_entity_profile
+from er.entity.securities import SECURITY_ID_TYPES, load_securities
 from er.entity.search import match_result_to_matches, search_by_cusip, search_by_lei, search_by_name
 from er.graph.build import build_hierarchy_tree
 from er.graph.models import HierarchyNode
@@ -818,6 +820,142 @@ def get_entity_connections(store: Store, entity_id: str, edge_type: str | None =
 
     return ToolResult(
         data={"entity_id": entity_id, "linked_records": linked, "groups": groups},
+        evidence=evidence,
+        facts=facts,
+    )
+
+
+def get_fund_structure(store: Store, identifier: str, id_type: str = "lei") -> ToolResult:
+    """A fund registrant's series and share classes from SEC's investment
+    company series/class register, found by registrant or series LEI, CIK,
+    series ID, class ID or ticker."""
+    if id_type not in FUND_ID_TYPES:
+        raise ValueError(f"id_type must be one of {', '.join(FUND_ID_TYPES)}")
+    qh = _query_hash("get_fund_structure", identifier=identifier, id_type=id_type)
+    rows = load_fund_series(store, identifier, id_type)
+    evidence: list[Evidence] = []
+    facts: list[Fact] = []
+    registrants: dict[str, list[dict]] = {}
+    for row in rows:
+        registrants.setdefault(row["cik"], []).append(row)
+
+    out = []
+    for cik, series_rows in registrants.items():
+        first = series_rows[0]
+        register_evidence = Evidence(
+            evidence_id=_evidence_id(),
+            source="SEC investment company series/class register",
+            source_timestamp=first.get("snapshot_date"),
+            fact_type="records",
+            criteria=[f"{id_type} = {identifier}", f"Registrant CIK = {cik}"],
+            record_refs=[row["series_id"] for row in series_rows],
+            fields_used=["series_id", "series_name", "class_id", "class_name", "class_ticker"],
+            result_count=len(series_rows),
+            query_hash=qh,
+        )
+        evidence.append(register_evidence)
+
+        def fact(predicate: str, value, locator: str, field: str) -> str:
+            made = _fact(
+                register_evidence,
+                subject=f"cik:{cik}",
+                predicate=predicate,
+                value=value,
+                document_id=first.get("source_file") or "sec_series_classes",
+                locator=locator,
+                field=field,
+                as_of=first.get("snapshot_date"),
+            )
+            facts.append(made)
+            return made.fact_id
+
+        registrant_locator = f"sec_series_classes.parquet:cik={cik}"
+        series_out = [
+            {
+                "series_id": row["series_id"],
+                "series_name": row["series_name"],
+                "series_lei": row.get("series_lei"),
+                "class_count_fact_id": fact(
+                    "fund.series_class_count", len(row["classes"]),
+                    f"sec_series_classes.parquet:series_id={row['series_id']}", "class_id",
+                ),
+                "classes": row["classes"],
+            }
+            for row in series_rows
+        ]
+        out.append(
+            {
+                "registrant_name": first.get("registrant_name"),
+                "registrant_lei": first.get("registrant_lei"),
+                "cik_fact_id": fact("fund.registrant_cik", cik, registrant_locator, "cik"),
+                "series_count_fact_id": fact("fund.series_count", len(series_rows), registrant_locator, "series_id"),
+                "class_count_fact_id": fact(
+                    "fund.class_count", sum(len(row["classes"]) for row in series_rows), registrant_locator, "class_id"
+                ),
+                "series": series_out,
+            }
+        )
+    return ToolResult(
+        data={"identifier": identifier, "id_type": id_type, "found": bool(rows), "registrants": out},
+        evidence=evidence,
+        facts=facts,
+    )
+
+
+def get_security(store: Store, identifier: str, id_type: str = "cusip") -> ToolResult:
+    """What a 13F CUSIP is, according to OpenFIGI: name, ticker, security type
+    and FIGIs, one entry per share class it maps to - or the CUSIPs a ticker
+    or FIGI belongs to."""
+    if id_type not in SECURITY_ID_TYPES:
+        raise ValueError(f"id_type must be one of {', '.join(SECURITY_ID_TYPES)}")
+    qh = _query_hash("get_security", identifier=identifier, id_type=id_type)
+    docs = load_securities(store, identifier, id_type)
+    evidence: list[Evidence] = []
+    facts: list[Fact] = []
+    matches = []
+    for doc in docs:
+        securities = doc.get("securities") or []
+        warnings = {
+            "ambiguous": [
+                f"This CUSIP maps to {len(securities)} different share classes in OpenFIGI; "
+                "none of them can be named as the CUSIP's security."
+            ],
+            "no_match": [f"OpenFIGI did not recognise this CUSIP ({doc.get('error') or 'no match'})."],
+        }.get(doc["status"], [])
+        security_evidence = Evidence(
+            evidence_id=_evidence_id(),
+            source="OpenFIGI mapping of a 13F CUSIP",
+            source_timestamp=doc.get("snapshot_date"),
+            fact_type="lookup",
+            criteria=[f"{id_type} = {identifier}", f"CUSIP = {doc['cusip']}"],
+            record_refs=[doc["cusip"]],
+            fields_used=["figi", "share_class_figi", "composite_figi", "name", "ticker", "security_type"],
+            result_count=len(securities),
+            query_hash=qh,
+            warnings=warnings,
+            source_uri=(
+                f"https://www.openfigi.com/id/{securities[0]['security_key']}" if doc["status"] == "resolved" else None
+            ),
+        )
+        evidence.append(security_evidence)
+        locator = f"openfigi_mappings.parquet:cusip={doc['cusip']}"
+        cusip_fact = _fact(
+            security_evidence, subject=f"cusip:{doc['cusip']}", predicate="security.cusip", value=doc["cusip"],
+            document_id=doc.get("source_file") or "openfigi", locator=locator, field="cusip", as_of=doc.get("snapshot_date"),
+        )
+        facts.append(cusip_fact)
+        entries = []
+        for security in securities:
+            listing_fact = _fact(
+                security_evidence, subject=f"figi:{security['security_key']}", predicate="security.listing_count",
+                value=security["listing_count"], document_id=doc.get("source_file") or "openfigi",
+                locator=f"{locator}:security={security['security_key']}", field="figi", as_of=doc.get("snapshot_date"),
+            )
+            facts.append(listing_fact)
+            entries.append({**security, "listing_count_fact_id": listing_fact.fact_id})
+        matches.append({"cusip": doc["cusip"], "cusip_fact_id": cusip_fact.fact_id, "status": doc["status"], "securities": entries})
+    return ToolResult(
+        data={"identifier": identifier, "id_type": id_type, "found": bool(docs), "matches": matches},
         evidence=evidence,
         facts=facts,
     )

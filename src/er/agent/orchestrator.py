@@ -57,6 +57,10 @@ def _tool_message(name: str, args: dict[str, Any]) -> str:
         return f"Searching Form ADV brochures for “{args.get('query', '')}”"
     if name == "get_position_history":
         return f"Reading 13F position history for CUSIP {args.get('cusip', '')}"
+    if name == "get_fund_structure":
+        return f"Reading the series and share classes for {args.get('identifier', 'the fund')}"
+    if name == "get_security":
+        return f"Looking up security {args.get('identifier', '')} in OpenFIGI"
     if name == "get_entity_connections":
         return f"Reading ownership and control records for {args.get('entity_id', 'the entity')}"
     if name == "get_beneficial_owners":

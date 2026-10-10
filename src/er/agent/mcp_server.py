@@ -19,6 +19,8 @@ from er.agent.tools import get_relationship_hierarchy as _get_relationship_hiera
 from er.agent.tools import search_entity as _search_entity
 from er.agent.tools import get_beneficial_owners as _get_beneficial_owners
 from er.agent.tools import get_entity_connections as _get_entity_connections
+from er.agent.tools import get_fund_structure as _get_fund_structure
+from er.agent.tools import get_security as _get_security
 from er.agent.tools import get_position_history as _get_position_history
 from er.agent.tools import search_adv_documents as _search_adv_documents
 from er.config import load_config
@@ -31,7 +33,8 @@ mcp = MCPServer(
         "resolved from GLEIF, SEC, Companies House and FFIEC data. Start with search_entity if "
         "you don't already have an entity_id (a GLEIF LEI); use get_entity_profile, "
         "get_relationship_hierarchy and get_entity_connections once you do. get_position_history and get_beneficial_owners take SEC CIKs, which "
-        "get_entity_profile returns for 13F filers."
+        "get_entity_profile returns for 13F filers. get_fund_structure answers which series and "
+        "share classes a fund registrant has; get_security says what a CUSIP, ticker or FIGI is."
     ),
 )
 
@@ -100,6 +103,27 @@ def get_entity_connections(entity_id: str, edge_type: str | None = None) -> Tool
     UK company number, RSSD). A connection with valid_to has ended - never
     present it as current. Pass edge_type to get one kind only."""
     return _get_entity_connections(get_store(load_config()), entity_id, edge_type=edge_type)
+
+
+@mcp.tool()
+def get_fund_structure(identifier: str, id_type: str = "lei") -> ToolResult:
+    """A registered fund's structure from SEC's series/class register: the
+    registrant, its fund series and each series' share classes with tickers.
+    id_type is one of "lei" (registrant or series LEI), "cik" (registrant),
+    "series_id" (S000...), "class_id" (C000...) or "ticker". A registrant LEI
+    or CIK returns all its series; anything else returns the matching series."""
+    return _get_fund_structure(get_store(load_config()), identifier, id_type=id_type)
+
+
+@mcp.tool()
+def get_security(identifier: str, id_type: str = "cusip") -> ToolResult:
+    """What a security is, from OpenFIGI's mapping of the CUSIPs in 13F
+    filings: name, ticker, security type, share-class and composite FIGIs.
+    id_type is one of "cusip", "ticker" or "figi". A CUSIP with status
+    "ambiguous" maps to several share classes - say so rather than picking
+    one; "no_match" means OpenFIGI didn't recognise it. Only CUSIPs that
+    appear in 13F filings are covered."""
+    return _get_security(get_store(load_config()), identifier, id_type=id_type)
 
 
 def run() -> None:

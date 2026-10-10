@@ -5,8 +5,16 @@ import pyarrow.parquet as pq
 
 from er.config import load_config
 from er.entity.resolution import load_match_decisions, record_review
-from er.serving.publish import adv_document_documents, adv_page_documents, entity_documents, nport_fund_documents
-from er.serving.store import ENTITIES, MemoryStore, OpenSearchStore
+from er.agent.tools import get_fund_structure, get_security
+from er.serving.publish import (
+    adv_document_documents,
+    adv_page_documents,
+    entity_documents,
+    fund_series_documents,
+    nport_fund_documents,
+    security_documents,
+)
+from er.serving.store import ENTITIES, FUND_SERIES, SECURITIES, MemoryStore, OpenSearchStore
 
 
 def _write(path, rows):
@@ -160,3 +168,59 @@ def test_nport_fund_document_is_the_latest_report_with_holdings_ranked_by_usd_va
     assert doc_id == "FUNDLEI"
     assert (doc["accession_number"], doc["net_assets"], doc["holding_count"]) == ("amended", 3.0, 2)
     assert [(h["issuer_name"], h["value_usd"]) for h in doc["top_holdings"]] == [("Large", 900.0), ("Small", 10.0)]
+
+
+def test_fund_structure_is_found_by_ticker_or_registrant_lei_with_nport_leis_joined(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.sec_series_class.processed_dir = cfg.nport.processed_dir = tmp_path
+    register = {"reporting_file_number": "811-1", "cik": "0000000042", "entity_name": "Index Trust",
+                "entity_org_type": "30", "city": None, "state": None, "zip_code": None,
+                "source_file": "series.csv", "snapshot_date": "2026-12-31", "ingested_at": None}
+    _write(tmp_path / "sec_series_classes.parquet", [
+        {**register, "series_id": "S1", "series_name": "Equity Fund", "class_id": "C1", "class_name": "Admiral", "class_ticker": "eqax"},
+        {**register, "series_id": "S1", "series_name": "Equity Fund", "class_id": "C2", "class_name": "Investor", "class_ticker": None},
+        {**register, "series_id": "S2", "series_name": "Bond Fund", "class_id": "C3", "class_name": "ETF", "class_ticker": "BNDX"},
+    ])
+    _write(tmp_path / "nport_funds.parquet", [
+        {"series_id": "S1", "series_lei": "SERIESLEI1", "registrant_lei": "TRUSTLEI", "report_date": "31-MAR-2026"},
+    ])
+    store = MemoryStore({FUND_SERIES: dict(fund_series_documents(cfg))})
+
+    by_ticker = get_fund_structure(store, "EQAX", id_type="ticker").data["registrants"]
+    by_registrant = get_fund_structure(store, "TRUSTLEI", id_type="lei")
+
+    assert [(series["series_id"], series["series_lei"]) for series in by_ticker[0]["series"]] == [("S1", "SERIESLEI1")]
+    assert [c["class_id"] for c in by_ticker[0]["series"][0]["classes"]] == ["C1", "C2"]
+    facts = {fact.fact_id: fact.value for fact in by_registrant.facts}
+    registrant = by_registrant.data["registrants"][0]
+    # S2 files no N-PORT of its own but shares the registrant's LEI.
+    assert facts[registrant["series_count_fact_id"]] == 2
+    assert facts[registrant["cik_fact_id"]] == "0000000042"
+
+
+def test_security_lookup_resolves_one_share_class_and_flags_an_ambiguous_cusip(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.openfigi.processed_dir = tmp_path
+    base = {"mapping_rank": 1, "market_sector": "Equity", "security_type": "Common Stock", "security_type_2": None,
+            "error": None, "source_file": "mapping-x.json", "snapshot_date": "2026-10-03", "ingested_at": None}
+    _write(tmp_path / "openfigi_mappings.parquet", [
+        {**base, "cusip": "037833100", "figi": "BBG000B9XRY4", "name": "APPLE INC", "ticker": "AAPL", "exchange_code": "US",
+         "share_class_figi": "BBG001S5N8V8", "composite_figi": "BBG000B9XRY4"},
+        {**base, "cusip": "037833100", "figi": "BBG000B9XVV8", "name": "APPLE INC", "ticker": "AAPL", "exchange_code": "UW",
+         "share_class_figi": "BBG001S5N8V8", "composite_figi": "BBG000B9XRY4"},
+        {**base, "cusip": "123456789", "figi": "BBG000000001", "name": "A", "ticker": "AAA", "exchange_code": "US",
+         "share_class_figi": None, "composite_figi": None},
+        {**base, "cusip": "123456789", "figi": "BBG000000002", "name": "B", "ticker": "BBB", "exchange_code": "US",
+         "share_class_figi": None, "composite_figi": None},
+    ])
+    store = MemoryStore({SECURITIES: dict(security_documents(cfg))})
+
+    apple = get_security(store, "aapl", id_type="ticker")
+    ambiguous = get_security(store, "123456789")
+
+    (match,) = apple.data["matches"]
+    assert (match["cusip"], match["status"]) == ("037833100", "resolved")
+    assert match["securities"][0]["share_class_figi"] == "BBG001S5N8V8"
+    assert match["securities"][0]["listing_count"] == 2
+    assert ambiguous.data["matches"][0]["status"] == "ambiguous"
+    assert "none of them can be named" in ambiguous.evidence[0].warnings[0]

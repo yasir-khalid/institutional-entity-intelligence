@@ -16,7 +16,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +26,7 @@ from mcp import Client
 from er.agent.models import AskResult as AgentAskResult
 from er.agent.orchestrator import ask as agent_ask
 from er.agent.orchestrator import mcp_stdio_params
+from er.api.a2a import mount_a2a
 from er.api.schemas import (
     AskRequest,
     AskResponse,
@@ -63,11 +64,96 @@ from er.serving.store import MissingIndexError, get_store
 logger = logging.getLogger(__name__)
 
 
+class McpUnavailableError(RuntimeError):
+    """The agent's local MCP subprocess could not be (re)started."""
+
+
 def _cfg() -> AppConfig:
     # Re-loaded per call rather than cached at import time - load_config()
     # itself is lru_cache'd (er.config), so this is cheap and keeps the module
     # free of import-time side effects.
     return load_config()
+
+
+async def _connect_mcp_client() -> Client:
+    """Start one stdio MCP subprocess and complete its handshake."""
+    client = Client(mcp_stdio_params(_cfg()))
+    await client.__aenter__()
+    return client
+
+
+async def _replace_mcp_client() -> Client | None:
+    """Replace a dead stdio client while its lifecycle lock is held.
+
+    A stdio subprocess can disappear independently of the API process (for
+    example after a deployment or an OS resource kill). Leaving its old client
+    in app state makes every later question fail immediately with the opaque
+    ``Connection closed`` message. A replacement spawns a fresh subprocess;
+    the agent only performs read-only lookups, so a fresh run is safe.
+    """
+    previous = app.state.mcp_client
+    app.state.mcp_client = None
+    if previous is not None:
+        try:
+            await previous.__aexit__(None, None, None)
+        except Exception:  # The process is already gone; closing is best-effort.
+            logger.warning("Could not cleanly close the previous MCP client", exc_info=True)
+    try:
+        client = await _connect_mcp_client()
+    except Exception:
+        logger.exception("Could not start the entity-intelligence MCP server")
+        return None
+    app.state.mcp_client = client
+    return client
+
+
+def _is_closed_mcp_connection(exc: BaseException) -> bool:
+    """Identify the stdio client's known terminal transport failure.
+
+    Do not catch all network-like failures here: OpenRouter failures already
+    have their own retry policy in ``er.agent.orchestrator`` and resetting a
+    healthy local MCP subprocess would only mask the useful provider message.
+    """
+    return str(exc).strip().lower() == "connection closed"
+
+
+async def _run_agent(
+    body: AskRequest,
+    *,
+    on_event: Callable[[dict], Awaitable[None]] | None = None,
+) -> AgentAskResult:
+    """Run one research request, recovering once if its stdio server died."""
+    async with app.state.mcp_lock:
+        client = app.state.mcp_client
+        if client is None:
+            client = await _replace_mcp_client()
+        if client is None:
+            raise McpUnavailableError("The research service is unavailable. Please try again shortly.")
+
+        kwargs = {
+            "history": [turn.model_dump() for turn in body.history],
+            "on_event": on_event,
+            "trace": body.trace,
+        }
+        try:
+            return await agent_ask(client, _cfg(), body.question, body.entity_id, **kwargs)
+        except Exception as exc:
+            if not _is_closed_mcp_connection(exc):
+                raise
+            logger.warning("The entity-intelligence MCP connection closed; restarting it")
+            if on_event is not None:
+                await on_event({"type": "status", "message": "Reconnecting the research service…"})
+            client = await _replace_mcp_client()
+            if client is None:
+                raise McpUnavailableError("The research service is unavailable. Please try again shortly.") from exc
+            try:
+                return await agent_ask(client, _cfg(), body.question, body.entity_id, **kwargs)
+            except Exception as retry_exc:
+                if _is_closed_mcp_connection(retry_exc):
+                    raise McpUnavailableError(
+                        "The research service closed again while reconnecting. Please try again shortly."
+                    ) from retry_exc
+                raise
 
 
 @contextlib.asynccontextmanager
@@ -79,10 +165,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # failure here (e.g. the subprocess command isn't on PATH) must not take
     # down search/tree/detail, which don't depend on it - only /api/ask does.
     app.state.mcp_client = None
+    app.state.mcp_lock = asyncio.Lock()
     try:
-        client = Client(mcp_stdio_params(_cfg()))
-        await client.__aenter__()
-        app.state.mcp_client = client
+        app.state.mcp_client = await _connect_mcp_client()
     except Exception:
         logger.exception("Could not start the entity-intelligence MCP server - /api/ask will be unavailable")
     yield
@@ -102,6 +187,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+async def _ask_for_a2a(
+    *,
+    question: str,
+    entity_id: str | None,
+    history: list[dict[str, str]],
+    on_event: Callable[[dict], Awaitable[None]],
+) -> AgentAskResult:
+    body = AskRequest(question=question, entity_id=entity_id, history=history)
+    return await _run_agent(body, on_event=on_event)
+
+
+mount_a2a(app, _ask_for_a2a, _cfg().a2a_public_url, _cfg().a2a_api_key)
 
 
 @app.exception_handler(MissingIndexError)
@@ -309,13 +408,10 @@ async def ask_question(body: AskRequest) -> AskResponse:
     drives an OpenRouter model through the MCP tools in er.agent.mcp_server
     (started once at app startup - see `lifespan` above) and returns an
     answer with citations to the Evidence records those tool calls produced."""
-    client = app.state.mcp_client
-    if client is None:
-        raise HTTPException(503, "The entity-intelligence agent is unavailable (its MCP server failed to start).")
     try:
-        result = await agent_ask(
-            client, _cfg(), body.question, body.entity_id, history=[turn.model_dump() for turn in body.history]
-        )
+        result = await _run_agent(body)
+    except McpUnavailableError as exc:
+        raise HTTPException(503, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
     return AskResponse(
@@ -337,10 +433,6 @@ async def ask_question_stream(body: AskRequest) -> StreamingResponse:
     /api/ask's response, or type "error" if the run failed. With `trace: true`
     in the body, "trace" events carrying developer spans are interleaved too
     (see er.agent.trace)."""
-    client = app.state.mcp_client
-    if client is None:
-        raise HTTPException(503, "The entity-intelligence agent is unavailable (its MCP server failed to start).")
-
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
     async def on_event(event: dict) -> None:
@@ -348,15 +440,7 @@ async def ask_question_stream(body: AskRequest) -> StreamingResponse:
 
     async def run() -> None:
         try:
-            result = await agent_ask(
-                client,
-                _cfg(),
-                body.question,
-                body.entity_id,
-                history=[turn.model_dump() for turn in body.history],
-                on_event=on_event,
-                trace=body.trace,
-            )
+            result = await _run_agent(body, on_event=on_event)
             verification = _verification_out(result)
             await queue.put(
                 {

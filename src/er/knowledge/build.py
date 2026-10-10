@@ -24,6 +24,15 @@ def _columns(path: Path) -> set[str]:
     return names
 
 
+def _openfigi_securities(path: Path) -> str:
+    """OpenFIGI mapping rows keyed by the security they describe. OpenFIGI
+    returns one FIGI per exchange listing and one composite FIGI per country,
+    all sharing a share-class FIGI - so a CUSIP is unambiguous when its rows
+    agree on that, not when they agree on a single FIGI."""
+    return f"""SELECT *, coalesce(share_class_figi, composite_figi, figi) AS security_key
+               FROM read_parquet('{path}') WHERE figi IS NOT NULL"""
+
+
 def _reviews(cfg: AppConfig, *, latest: bool = False) -> str | None:
     """Human match reviews as a SQL relation, or None when there are none.
     With latest=True only each (node_id, lei) pair's most recent outcome is
@@ -121,12 +130,12 @@ def _node_queries(cfg: AppConfig) -> list[str]:
     openfigi = cfg.openfigi.processed_dir / "openfigi_mappings.parquet"
     if openfigi.exists():
         queries.append(f"""
-            SELECT 'figi:' || figi AS node_id, '{NodeType.SECURITY}' AS node_type,
+            SELECT 'figi:' || security_key AS node_id, '{NodeType.SECURITY}' AS node_type,
                    any_value(name) AS display_name, NULL AS status,
-                   'openfigi' AS source, figi AS source_record_ref,
+                   'openfigi' AS source, security_key AS source_record_ref,
                    any_value(source_file) AS source_file,
                    max(snapshot_date) AS snapshot_date, max(ingested_at) AS ingested_at
-            FROM read_parquet('{openfigi}') WHERE figi IS NOT NULL GROUP BY figi
+            FROM ({_openfigi_securities(openfigi)}) GROUP BY security_key
         """)
 
     filings = cfg.sec_13f.processed_dir / "sec_13f_filings.parquet"
@@ -366,13 +375,13 @@ def _edge_queries(cfg: AppConfig) -> list[str]:
     if openfigi.exists():
         queries.append(f"""
             SELECT 'security:cusip:' || cusip AS start_node_id,
-                   'figi:' || min(figi) AS end_node_id,
+                   'figi:' || min(security_key) AS end_node_id,
                    '{EdgeType.SAME_AS}' AS edge_type, NULL AS valid_from, NULL AS valid_to,
                    'openfigi' AS source, cusip AS source_record_ref,
                    any_value(source_file) AS source_file,
                    max(snapshot_date) AS snapshot_date, max(ingested_at) AS ingested_at
-            FROM read_parquet('{openfigi}') WHERE figi IS NOT NULL
-            GROUP BY cusip HAVING count(DISTINCT figi) = 1
+            FROM ({_openfigi_securities(openfigi)})
+            GROUP BY cusip HAVING count(DISTINCT security_key) = 1
         """)
 
     insiders = cfg.sec_insiders.processed_dir / "sec_insider_relationships.parquet"

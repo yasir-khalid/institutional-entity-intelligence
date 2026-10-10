@@ -21,7 +21,20 @@ from opensearchpy import OpenSearch, helpers
 from er.config import AppConfig
 from er.indexing.opensearch_index import get_client
 
-from .store import ADV_DOCUMENTS, ADV_PAGES, ENTITIES, FILERS, HOLDINGS, NPORT_FUNDS, OWNERSHIP, RELATIONSHIPS
+from er.knowledge.build import _openfigi_securities
+
+from .store import (
+    ADV_DOCUMENTS,
+    ADV_PAGES,
+    ENTITIES,
+    FILERS,
+    FUND_SERIES,
+    HOLDINGS,
+    NPORT_FUNDS,
+    OWNERSHIP,
+    RELATIONSHIPS,
+    SECURITIES,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +65,16 @@ MAPPINGS = {
         "value_usd": {"type": "long"},
     },
     NPORT_FUNDS: {"series_lei": _KEYWORD, "cik": _KEYWORD, "top_holdings": _STORED_ONLY},
+    FUND_SERIES: {
+        "series_id": _KEYWORD,
+        "cik": _KEYWORD,
+        "series_lei": _KEYWORD,
+        "registrant_lei": _KEYWORD,
+        "class_ids": _KEYWORD,
+        "tickers": _KEYWORD,
+        "classes": _STORED_ONLY,
+    },
+    SECURITIES: {"cusip": _KEYWORD, "tickers": _KEYWORD, "figis": _KEYWORD, "securities": _STORED_ONLY},
     RELATIONSHIPS: {
         "start_node_id": _KEYWORD,
         "end_node_id": _KEYWORD,
@@ -422,6 +445,85 @@ def nport_fund_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
         yield row["series_lei"], row
 
 
+def fund_series_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per fund series: its registrant and share classes from SEC's series/class
+    register, plus the series and registrant LEIs its N-PORT reports state. The
+    registrant LEI is shared by all the registrant's series, including those
+    with no N-PORT report of their own."""
+    series = cfg.sec_series_class.processed_dir / "sec_series_classes.parquet"
+    funds = cfg.nport.processed_dir / "nport_funds.parquet"
+    if not series.exists():
+        return
+    leis = (
+        f"""SELECT series_id, arg_max(series_lei, strptime(report_date, '%d-%b-%Y')) AS series_lei,
+                   arg_max(registrant_lei, strptime(report_date, '%d-%b-%Y')) AS registrant_lei
+            FROM read_parquet('{funds}') WHERE series_id IS NOT NULL GROUP BY series_id"""
+        if funds.exists()
+        else "SELECT NULL::VARCHAR AS series_id, NULL::VARCHAR AS series_lei, NULL::VARCHAR AS registrant_lei WHERE false"
+    )
+    for row in _rows(f"""
+        WITH leis AS ({leis}),
+        registrants AS (
+            SELECT s.cik, any_value(l.registrant_lei) AS registrant_lei
+            FROM read_parquet('{series}') s JOIN leis l USING (series_id)
+            WHERE l.registrant_lei IS NOT NULL GROUP BY s.cik
+        )
+        SELECT s.series_id, any_value(s.series_name) AS series_name, any_value(s.cik) AS cik,
+               any_value(s.entity_name) AS registrant_name, any_value(l.series_lei) AS series_lei,
+               any_value(r.registrant_lei) AS registrant_lei,
+               list(struct_pack(class_id := s.class_id, class_name := s.class_name, ticker := s.class_ticker)
+                    ORDER BY s.class_id) AS classes,
+               list(DISTINCT s.class_id) AS class_ids,
+               coalesce(list(DISTINCT upper(s.class_ticker)) FILTER (WHERE s.class_ticker IS NOT NULL), []) AS tickers,
+               max(s.snapshot_date) AS snapshot_date, any_value(s.source_file) AS source_file
+        FROM read_parquet('{series}') s LEFT JOIN leis l USING (series_id) LEFT JOIN registrants r USING (cik)
+        WHERE coalesce(s.series_id, '') <> ''
+        GROUP BY s.series_id
+    """):
+        yield row["series_id"], row
+
+
+def security_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per 13F CUSIP sent to OpenFIGI: the securities it maps to, one entry per
+    share class (er.knowledge.build._openfigi_securities). More than one is an
+    ambiguous mapping; none is a CUSIP OpenFIGI didn't recognise."""
+    path = cfg.openfigi.processed_dir / "openfigi_mappings.parquet"
+    if not path.exists():
+        return
+    for row in _rows(f"""
+        WITH listings AS ({_openfigi_securities(path)}),
+        per_security AS (
+            SELECT cusip, security_key, any_value(share_class_figi) AS share_class_figi,
+                   coalesce(list(DISTINCT composite_figi) FILTER (WHERE composite_figi IS NOT NULL), []) AS composite_figis,
+                   coalesce(any_value(name) FILTER (WHERE exchange_code = 'US'), any_value(name)) AS name,
+                   coalesce(any_value(ticker) FILTER (WHERE exchange_code = 'US'), any_value(ticker)) AS ticker,
+                   any_value(security_type) AS security_type, any_value(security_type_2) AS security_type_2,
+                   any_value(market_sector) AS market_sector, count(*) AS listing_count
+            FROM listings GROUP BY cusip, security_key
+        ),
+        cusips AS (
+            SELECT cusip, max(snapshot_date) AS snapshot_date, any_value(source_file) AS source_file,
+                   any_value(error) AS error
+            FROM read_parquet('{path}') GROUP BY cusip
+        )
+        SELECT c.cusip, c.snapshot_date, c.source_file, c.error,
+               coalesce(list(struct_pack(security_key := p.security_key, share_class_figi := p.share_class_figi,
+                                         composite_figis := p.composite_figis, name := p.name, ticker := p.ticker,
+                                         security_type := p.security_type, security_type_2 := p.security_type_2,
+                                         market_sector := p.market_sector, listing_count := p.listing_count)
+                             ORDER BY p.listing_count DESC, p.security_key)
+                        FILTER (WHERE p.security_key IS NOT NULL), []) AS securities,
+               coalesce(list(DISTINCT upper(p.ticker)) FILTER (WHERE p.ticker IS NOT NULL), []) AS tickers,
+               coalesce(list(DISTINCT p.security_key) FILTER (WHERE p.security_key IS NOT NULL), [])
+                   || coalesce(flatten(list(p.composite_figis)), []) AS figis
+        FROM cusips c LEFT JOIN per_security p USING (cusip)
+        GROUP BY c.cusip, c.snapshot_date, c.source_file, c.error
+    """):
+        count = len(row["securities"])
+        row["status"] = "no_match" if count == 0 else "resolved" if count == 1 else "ambiguous"
+        yield row["cusip"], row
+
+
 def relationship_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
     path = cfg.gleif.processed_dir / "gleif_relationships.parquet"
     if not path.exists():
@@ -462,6 +564,8 @@ BUILDERS: dict[str, Callable[[AppConfig], Iterator[tuple[str, dict]]]] = {
     FILERS: filer_documents,
     HOLDINGS: holding_documents,
     NPORT_FUNDS: nport_fund_documents,
+    FUND_SERIES: fund_series_documents,
+    SECURITIES: security_documents,
     RELATIONSHIPS: relationship_documents,
     OWNERSHIP: ownership_documents,
     ADV_DOCUMENTS: adv_document_documents,
