@@ -152,6 +152,24 @@ optimizes against), and a `failure_breakdown` that categorizes every row into
 never conflated. See [`experiments/README.md`](../experiments/README.md) for the
 ongoing, proof-backed log of techniques tried against this benchmark.
 
+## Research workspace and serving generations
+
+The Next.js workspace calls the existing HTTP boundary for entity search,
+profiles, relationships, match reviews and the MCP-backed agent. Shared entity
+routes preserve tabs in the URL; research conversations and leased background
+jobs live in `er.workspace`, separate from entity-resolution logic. They use
+the Store's conditional revision writes, and the API lifespan owns the worker.
+Research is runtime-authored metadata with explicit Parquet backup/restore,
+like reviews, not a replacement system of record for institutional source data.
+
+Full serving publications stage/count every index and atomically switch all
+aliases together, including a coverage inventory measured from build inputs.
+Prior generation indexes and Parquet manifests are retained for validated
+rollback. Matching's retrieval index remains a separate concern. Reviews and
+investigations are untouched by publish/rollback. Partial publication is labeled
+as such and is not a valid complete rollback target. Detailed commands and
+limitations are in [workspace operations](workspace.md).
+
 ## Repo layout
 
 ```

@@ -53,6 +53,11 @@ class Fact(BaseModel):
     value: str | int | float | bool | None
     unit: str | None = None
     as_of: str | None = None
+    # SOURCE_FACT is a value a source record states; DERIVED_FACT is one a
+    # registered formula (er.knowledge.formulas) computed from other facts. The
+    # distinction travels to the reader so a computed figure is never mistaken
+    # for a reported one - see er.agent.tools._derive.
+    provenance_class: Literal["SOURCE_FACT", "DERIVED_FACT"] = "SOURCE_FACT"
     address: FactAddress
 
 
@@ -97,6 +102,19 @@ class VerificationCheck(BaseModel):
     passed: bool | None = None
 
 
+class GateCheck(BaseModel):
+    """One deterministic precondition an answer's facts must satisfy before it
+    may be submitted - see er.agent.gates. Unlike VerificationCheck (a model's
+    calibrated judgement), a gate is pure code with a yes/no answer: it either
+    passed or it did not, and a failure blocks submission rather than lowering
+    a score."""
+
+    key: str
+    label: str
+    passed: bool
+    message: str = ""
+
+
 class Verification(BaseModel):
     """The verification badge attached to an AskResult - see er.agent.verifier.
 
@@ -131,4 +149,7 @@ class AskResult(BaseModel):
     # How each derived fact in `facts` was computed, and the input facts it
     # needs (included in `facts` too, so every input can be shown).
     derivations: dict[str, Derivation] = {}
+    # The deterministic preconditions (units agree, derivations recompute, every
+    # value is addressed and dated) that were checked before submission.
+    gates: list[GateCheck] = []
     verification: Verification | None = None

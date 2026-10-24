@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -112,12 +112,70 @@ class FfiecNicConfig(BaseModel):
     batch_size: int = 50_000
 
 
+class SecXbrlConfig(BaseModel):
+    """SEC XBRL company facts: the financial statements an operating company
+    reports to EDGAR, as machine-readable facts. Keyed by the issuer's CIK -
+    the same CIK the platform already attaches to entities from 13F, 13D/G and
+    Forms 3/4/5 - so a source that adds arithmetic-heavy, dated values needs no
+    fuzzy crosswalk. Unlike every other source here, one fact is a numeric
+    observation with both a period (period_end) and a knowledge time (filed),
+    which is what makes point-in-time and invariant checks possible."""
+
+    raw_dir: Path = Path("data/raw/sec_xbrl")
+    processed_dir: Path = Path("data/processed")
+    company_facts_url: str = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+    # data.sec.gov requires a descriptive User-Agent and stops answering without one.
+    user_agent: str = "institutional-entity-intelligence/0.1 research@example.com"
+    # Issuer CIKs to fetch. Left empty, the ingest derives them from the sources
+    # already processed (issuers named in Schedule 13D/G and Forms 3/4/5),
+    # ranked by how often those tables mention them and capped by max_issuers.
+    ciks: list[str] = []
+    max_issuers: int = 40
+    requests_per_second: float = 8
+    # companyfacts carries thousands of concepts; only these us-gaap tags are
+    # stored - a deliberately small, reasoning-ready set.
+    tags: list[str] = [
+        "Assets",
+        "Liabilities",
+        "LiabilitiesAndStockholdersEquity",
+        "StockholdersEquity",
+        "AssetsCurrent",
+        "LiabilitiesCurrent",
+        "CashAndCashEquivalentsAtCarryingValue",
+        "Revenues",
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "OperatingIncomeLoss",
+        "NetIncomeLoss",
+        "GrossProfit",
+        "LongTermDebtNoncurrent",
+        "Goodwill",
+        "EarningsPerShareDiluted",
+        "CommonStockSharesOutstanding",
+    ]
+    batch_size: int = 25_000
+
+
 class ServingConfig(BaseModel):
     # Every serving index is reached through an alias "<prefix>_<name>" (see
     # er.serving.store); `make publish` builds a dated index and swaps the alias.
     prefix: str = "er"
     bulk_batch_size: int = 2000
     connections_per_group: int = 25
+
+
+class WorkspaceConfig(BaseModel):
+    poll_seconds: float = Field(2.0, gt=0)
+    lease_seconds: float = Field(90.0, gt=0)
+    heartbeat_seconds: float = Field(15.0, gt=0)
+    max_attempts: int = Field(3, ge=1)
+    max_turns: int = Field(50, ge=1)
+    max_events: int = Field(100, ge=1)
+
+    @model_validator(mode="after")
+    def heartbeat_within_lease(self):
+        if self.heartbeat_seconds >= self.lease_seconds:
+            raise ValueError("workspace heartbeat_seconds must be shorter than lease_seconds")
+        return self
 
 
 class EntityConfig(BaseModel):
@@ -287,7 +345,9 @@ class AppConfig(BaseModel):
     companies_house: CompaniesHouseConfig = CompaniesHouseConfig()
     sec_13dg: Sec13DGConfig = Sec13DGConfig()
     ffiec_nic: FfiecNicConfig = FfiecNicConfig()
+    sec_xbrl: SecXbrlConfig = SecXbrlConfig()
     serving: ServingConfig = ServingConfig()
+    workspace: WorkspaceConfig = WorkspaceConfig()
     entity: EntityConfig
     opensearch: OpenSearchConfig
     search: SearchConfig
@@ -344,6 +404,7 @@ def load_config(path: str | Path = REPO_ROOT / "config" / "dev.yaml") -> AppConf
         cfg.companies_house,
         cfg.sec_13dg,
         cfg.ffiec_nic,
+        cfg.sec_xbrl,
     ):
         section.raw_dir = REPO_ROOT / section.raw_dir
         section.processed_dir = REPO_ROOT / section.processed_dir

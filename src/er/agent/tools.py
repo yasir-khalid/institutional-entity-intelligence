@@ -25,6 +25,7 @@ from er.entity.positions import load_position_rows
 from er.entity.profile import get_entity_profile
 from er.entity.securities import SECURITY_ID_TYPES, load_securities
 from er.entity.search import match_result_to_matches, search_by_cusip, search_by_lei, search_by_name
+from er.entity.xbrl import balance_check, cik_of, known_on, load_series, normalise_unit, resolve_issuer
 from er.graph.build import build_hierarchy_tree
 from er.graph.models import HierarchyNode
 from er.knowledge.formulas import FORMULAS
@@ -41,6 +42,13 @@ THIRTEEN_F_CAVEAT = (
 NPORT_CAVEAT = (
     "Form N-PORT is a dated monthly snapshot made public with a 60-day lag - "
     "the portfolio as of the report date, not today."
+)
+XBRL_CAVEAT = (
+    "SEC XBRL company facts are the values the issuer tagged in its own EDGAR "
+    "filing; they are as-reported, not adjusted, and an amended filing (10-K/A) "
+    "restates a period rather than correcting the original in place. Each value "
+    "is dated by the filing it came from, so a later filing can revise an "
+    "earlier period."
 )
 
 
@@ -64,6 +72,7 @@ def _fact(
     field: str,
     unit: str | None = None,
     as_of: str | None = None,
+    provenance_class: str = "SOURCE_FACT",
     uri: str | None = None,
     page: int | None = None,
     char_start: int | None = None,
@@ -93,6 +102,7 @@ def _fact(
         value=value,
         unit=unit,
         as_of=as_of,
+        provenance_class=provenance_class,  # type: ignore[arg-type]
         address=address,
     )
 
@@ -577,11 +587,12 @@ def _derive(
         subject=subject,
         predicate=predicate,
         value=value,
-        unit=formula.unit or inputs[0].unit,
+        unit=formula.output_unit([fact.unit for fact in inputs]),
         document_id=formula_id,
         locator=f"{formula_id}({','.join(fact.fact_id for fact in inputs)})",
         field="value",
         as_of=as_of,
+        provenance_class="DERIVED_FACT",
     )
     derivations.append(
         Derivation(
@@ -1032,3 +1043,212 @@ def get_beneficial_owners(store: Store, issuer_cik: str, limit: int = 25) -> Too
         evidence=evidence,
         facts=facts,
     )
+
+
+def _xbrl_observation_fact(evidence: Evidence, series, row: dict) -> Fact:
+    accession = row.get("accession_number") or ""
+    return _fact(
+        evidence,
+        subject=f"cik:{series.cik}",
+        predicate=f"xbrl.{series.tag}",
+        value=row["value"],
+        unit=normalise_unit(series.unit),
+        document_id=accession or f"CIK{series.cik}",
+        locator=(
+            f"companyfacts/{series.tag}/{series.unit}/{row.get('period_end')}"
+            f"/filed={row.get('filed')}"
+        ),
+        field=series.tag,
+        as_of=row.get("period_end"),
+        uri=_edgar_filing_url(series.cik, accession) if accession else None,
+    )
+
+
+def get_issuer_financials(
+    store: Store,
+    identifier: str,
+    id_type: str = "cik",
+    tag: str | None = None,
+    as_of: str | None = None,
+    periods: int = 4,
+) -> ToolResult:
+    """As-reported financial statement values an issuer tagged in its EDGAR
+    filings (SEC XBRL company facts), resolved to the issuer by CIK, ticker or
+    name. With no `tag`, returns the concepts available and each one's latest
+    value. With a `tag` (e.g. "Assets", "Revenues", "NetIncomeLoss"), returns
+    that concept's recent observations - each dated by period and by the filing
+    that reported it - plus, where the inputs are present, a derived
+    period-over-period change and the balance-sheet identity
+    Assets = LiabilitiesAndStockholdersEquity. Pass `as_of` (YYYY-MM-DD) to see
+    only what had been filed on or before that date."""
+    want = (tag or "").strip().lower()
+    periods = min(max(periods, 2), 8)
+    qh = _query_hash("get_issuer_financials", identifier=identifier, id_type=id_type, tag=tag, as_of=as_of)
+    try:
+        issuer = resolve_issuer(store, identifier, id_type)
+    except ValueError as exc:
+        return ToolResult(data={"found": False, "identifier": identifier, "id_type": id_type, "reason": str(exc)})
+    if issuer is None:
+        return ToolResult(data={"identifier": identifier, "id_type": id_type, "found": False})
+    cik = cik_of(issuer["cik"])
+    series = load_series(store, cik)
+    if not series:
+        return ToolResult(
+            data={"issuer": _issuer_summary(issuer), "found": False,
+                  "reason": "No XBRL company facts are ingested for this issuer."}
+        )
+
+    selected = [item for item in series if want and (item.tag.lower() == want or item.tag.lower().endswith(want))]
+    available = sorted(item.tag for item in series)
+    if want and not selected:
+        return ToolResult(data={"issuer": _issuer_summary(issuer), "found": False, "tag": tag,
+                                "available_tags": available,
+                                "reason": "No observations for that tag; see available_tags."})
+
+    facts: list[Fact] = []
+    evidence: list[Evidence] = []
+    checks: list[dict] = []
+    payload_series: list[dict] = []
+    for item in selected or series:
+        rows = known_on(item.observations, as_of)[-periods:]
+        if not rows:
+            continue
+        item_evidence = Evidence(
+            evidence_id=_evidence_id(),
+            source="SEC XBRL company facts (EDGAR)",
+            source_timestamp=max(str(row.get("filed") or "") for row in rows) or None,
+            fact_type="records",
+            criteria=[f"CIK = {cik}", f"Concept = {item.tag}",
+                      f"As filed on or before {as_of}" if as_of else "Latest as filed"],
+            record_refs=[str(row.get("accession_number") or "") for row in rows if row.get("accession_number")],
+            fields_used=["value", "period_end", "filed"],
+            result_count=len(rows),
+            query_hash=qh,
+            warnings=[XBRL_CAVEAT],
+            source_uri=f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/us-gaap/{item.tag}.json",
+        )
+        evidence.append(item_evidence)
+        item_facts = [_xbrl_observation_fact(item_evidence, item, row) for row in rows]
+        facts.extend(item_facts)
+        latest_fact = item_facts[-1]
+        payload_series.append(
+            {
+                "tag": item.tag,
+                "unit": normalise_unit(item.unit),
+                "latest_value": rows[-1]["value"],
+                "latest_period_end": rows[-1].get("period_end"),
+                "latest_filed": rows[-1].get("filed"),
+                "latest_fact_id": latest_fact.fact_id,
+                "observations": [
+                    {"value": row["value"], "period_end": row.get("period_end"),
+                     "period_start": row.get("period_start"), "filed": row.get("filed"),
+                     "form": row.get("form"), "accession_number": row.get("accession_number")}
+                    for row in rows
+                ],
+            }
+        )
+
+    derivation_evidence = Evidence(
+        evidence_id=_evidence_id(),
+        source="Calculated from SEC XBRL company facts",
+        fact_type="derivation",
+        criteria=[],
+        record_refs=[item.evidence_id for item in evidence],
+        fields_used=["value"],
+        query_hash=qh,
+        warnings=[XBRL_CAVEAT],
+    )
+    derivations: list[Derivation] = []
+    payload_derived: list[dict] = []
+
+    for entry in payload_series:
+        item = next(item for item in series if item.tag == entry["tag"])
+        rows = known_on(item.observations, as_of)[-periods:]
+        item_facts = [fact for fact in facts if fact.predicate == f"xbrl.{item.tag}"]
+        if len(item_facts) >= 2:
+            current, previous = item_facts[-1], item_facts[-2]
+            change = _derive(
+                derivation_evidence, derivations, "percent_change", [current, previous],
+                subject=f"cik:{cik}", predicate=f"xbrl.{item.tag}.percent_change",
+                as_of=rows[-1].get("period_end"),
+            )
+            if change is not None:
+                facts.append(change)
+                payload_derived.append({"predicate": change.predicate, "value": change.value,
+                                        "unit": change.unit, "fact_id": change.fact_id,
+                                        "inputs": derivations[-1].inputs})
+
+    for a_tag, b_tag, formula_id, predicate in (
+        ("AssetsCurrent", "LiabilitiesCurrent", "ratio", "xbrl.current_ratio"),
+    ):
+        numerator = _latest_fact(facts, f"xbrl.{a_tag}")
+        denominator = _latest_fact(facts, f"xbrl.{b_tag}")
+        if numerator and denominator:
+            ratio = _derive(
+                derivation_evidence, derivations, formula_id, [numerator, denominator],
+                subject=f"cik:{cik}", predicate=predicate, as_of=numerator.as_of,
+            )
+            if ratio is not None:
+                facts.append(ratio)
+                payload_derived.append({"predicate": ratio.predicate, "value": ratio.value,
+                                        "unit": ratio.unit, "fact_id": ratio.fact_id,
+                                        "inputs": derivations[-1].inputs})
+
+    identity = balance_check(series, as_of)
+    if identity is not None:
+        checks.append(identity)
+        assets = _latest_fact(facts, "xbrl.Assets")
+        total = _latest_fact(facts, "xbrl.LiabilitiesAndStockholdersEquity")
+        if assets and total:
+            residual = _derive(
+                derivation_evidence, derivations, "difference", [assets, total],
+                subject=f"cik:{cik}", predicate="xbrl.balance_residual", as_of=assets.as_of,
+            )
+            if residual is not None:
+                facts.append(residual)
+                payload_derived.append({"predicate": residual.predicate, "value": residual.value,
+                                        "unit": residual.unit, "fact_id": residual.fact_id,
+                                        "inputs": derivations[-1].inputs})
+        if not identity["passed"]:
+            for item in evidence:
+                item.warnings.append(
+                    f"Balance-sheet identity does not hold for {identity['period_end']}: "
+                    f"Assets - LiabilitiesAndStockholdersEquity = {identity['residual']:,.0f}."
+                )
+        else:
+            for item in evidence:
+                item.warnings.append(
+                    f"Balance-sheet identity holds for {identity['period_end']} "
+                    "(Assets = LiabilitiesAndStockholdersEquity)."
+                )
+
+    return ToolResult(
+        data={
+            "issuer": _issuer_summary(issuer),
+            "found": True,
+            "as_of": as_of,
+            "tag": tag,
+            "series": payload_series,
+            "derived": payload_derived,
+            "checks": checks,
+            "available_tags": available,
+        },
+        evidence=evidence + [derivation_evidence] if payload_derived else evidence,
+        facts=facts,
+        derivations=derivations,
+    )
+
+
+def _issuer_summary(issuer: dict) -> dict:
+    return {
+        "cik": cik_of(issuer["cik"]),
+        "entity_name": issuer.get("entity_name"),
+        "tickers": issuer.get("tickers") or [],
+        "former_names": issuer.get("former_names") or [],
+        "sic": issuer.get("sic"),
+    }
+
+
+def _latest_fact(facts: list[Fact], predicate: str) -> Fact | None:
+    matches = [fact for fact in facts if fact.predicate == predicate]
+    return matches[-1] if matches else None

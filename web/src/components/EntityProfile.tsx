@@ -12,6 +12,16 @@ import {
   type ToolResult,
 } from "@/lib/api";
 import { DerivationDetail, formatFactValue } from "@/components/FactValues";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 /* ---------------------------------------------------------------------------
    The entity profile under search results. Each section is one kind of claim
@@ -167,16 +177,16 @@ function ReviewForm({ decision, onSaved }: { decision: MatchDecision; onSaved: (
 
   return (
     <div className="review-form">
-      <input value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="Reviewer" aria-label="Reviewer" />
-      <input value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Rationale" aria-label="Rationale" />
-      <button type="button" disabled={saving || !reviewer.trim()} onClick={() => void save("CONFIRMED")}>Confirm link</button>
-      <button type="button" className="is-reject" disabled={saving || !reviewer.trim()} onClick={() => void save("REJECTED")}>Reject link</button>
+      <Input value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="Reviewer" aria-label="Reviewer" />
+      <Input value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Rationale" aria-label="Rationale" />
+      <Button type="button" size="sm" disabled={saving || !reviewer.trim()} onClick={() => void save("CONFIRMED")}>Confirm link</Button>
+      <Button type="button" size="sm" variant="outline" className="is-reject" disabled={saving || !reviewer.trim()} onClick={() => void save("REJECTED")}>Reject link</Button>
       {error && <p className="review-error">{error}</p>}
     </div>
   );
 }
 
-function DecisionCard({ decision, onOpenEntity }: { decision: MatchDecision; onOpenEntity: (lei: string) => void }) {
+export function DecisionCard({ decision, onOpenEntity }: { decision: MatchDecision; onOpenEntity: (lei: string) => void }) {
   const [reviews, setReviews] = useState(decision.reviews);
   const features = Object.entries(decision.feature_contributions).sort((a, b) => b[1] - a[1]);
   const maxPoints = Math.max(1, ...features.map(([, points]) => Math.abs(points)));
@@ -239,7 +249,7 @@ function DecisionCard({ decision, onOpenEntity }: { decision: MatchDecision; onO
             ))}
           </ul>
         )}
-        <ReviewForm decision={decision} onSaved={(review) => setReviews((current) => [...current, review])} />
+        {decision.lei && <ReviewForm decision={decision} onSaved={(review) => setReviews((current) => [...current, review])} />}
         <small className="decision-footnote">A review never edits the decision. It is stored separately and changes the graph link on the next knowledge-graph build.</small>
       </div>
     </article>
@@ -357,24 +367,29 @@ function PositionHistory({ cik, cusip }: { cik: string; cusip: string }) {
 
   return (
     <div className="position-history">
-      <table>
-        <thead>
-          <tr><th>Period</th><th>Position</th><th>Change</th><th>%</th></tr>
-        </thead>
-        <tbody>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Period</TableHead>
+            <TableHead>Position</TableHead>
+            <TableHead>Change</TableHead>
+            <TableHead>%</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {periods.map((period) => {
             const change = changeFor.get(period.period_of_report);
             return (
-              <tr key={period.period_of_report}>
-                <td>{period.period_of_report}</td>
-                <td>{derived(period.position_value_fact_id)}</td>
-                <td>{derived(change?.change_fact_id ?? null)}</td>
-                <td>{derived(change?.percent_change_fact_id ?? null)}</td>
-              </tr>
+              <TableRow key={period.period_of_report}>
+                <TableCell>{period.period_of_report}</TableCell>
+                <TableCell>{derived(period.position_value_fact_id)}</TableCell>
+                <TableCell>{derived(change?.change_fact_id ?? null)}</TableCell>
+                <TableCell>{derived(change?.percent_change_fact_id ?? null)}</TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
       {opened && <DerivationDetail derivation={opened} facts={facts} derivations={derivations} />}
       {warnings.map((warning) => <p key={warning} className="profile-caveat">{warning}</p>)}
     </div>
@@ -468,10 +483,12 @@ export default function EntityProfile({
   detail,
   loading,
   onOpenEntity,
+  view = "all",
 }: {
   detail: EntityDetail | null;
   loading: boolean;
   onOpenEntity: (lei: string) => void;
+  view?: "all" | "overview" | "relationships" | "holdings" | "resolution";
 }) {
   if (loading) {
     return <div id="entity-profile" className="entity-profile-loading"><Loader2 className="animate-spin" /> Opening entity profile…</div>;
@@ -506,11 +523,12 @@ export default function EntityProfile({
         <div><small>Next renewal</small><p>{detail.lineage?.next_renewal_date?.slice(0, 10) ?? "—"}</p></div>
         <div><small>GLEIF parents · children</small><p>{detail.parent_count} · {detail.subsidiary_count}</p></div>
       </div>
-      <Identifiers detail={detail} />
-      <Resolution detail={detail} onOpenEntity={onOpenEntity} />
-      <Connections detail={detail} onOpenEntity={onOpenEntity} />
-      <Holdings detail={detail} />
-      <FundReport detail={detail} />
+      {(view === "all" || view === "overview") && <Identifiers detail={detail} />}
+      {(view === "all" || view === "resolution") && <Resolution detail={detail} onOpenEntity={onOpenEntity} />}
+      {view === "resolution" && detail.match_decisions.length === 0 && <p className="profile-empty">No stored crosswalk decisions for this entity.</p>}
+      {(view === "all" || view === "relationships") && <Connections detail={detail} onOpenEntity={onOpenEntity} />}
+      {(view === "all" || view === "holdings") && <><Holdings detail={detail} /><FundReport detail={detail} /></>}
+      {view === "holdings" && !detail.sec_13f && !detail.nport && <p className="profile-empty">No published 13F or N-PORT reports linked to this entity. This is not evidence of no investments.</p>}
     </section>
   );
 }

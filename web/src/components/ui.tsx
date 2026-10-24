@@ -18,38 +18,9 @@ export function SectionLabel({ children, icon }: { children: ReactNode; icon?: R
   );
 }
 
-/* Each variant is a tinted surface + a same-hue text colour dark enough to
-   read on it (700/800, not 600) + a ring one step stronger than the fill, so
-   badges hold their shape against both white cards and the canvas. */
-const BADGE_VARIANTS = {
-  neutral: "bg-slate-100 text-slate-700 ring-slate-300/70",
-  accent: "bg-indigo-50 text-indigo-700 ring-indigo-300/70",
-  positive: "bg-emerald-50 text-emerald-800 ring-emerald-300/70",
-  caution: "bg-amber-50 text-amber-800 ring-amber-300/70",
-  critical: "bg-rose-50 text-rose-700 ring-rose-300/70",
-  upward: "bg-emerald-50 text-emerald-800 ring-emerald-300/70",
-  downward: "bg-violet-50 text-violet-800 ring-violet-300/70",
-} as const;
-
-export type BadgeVariant = keyof typeof BADGE_VARIANTS;
-
-export function Badge({
-  children,
-  variant = "neutral",
-  className = "",
-}: {
-  children: ReactNode;
-  variant?: BadgeVariant;
-  className?: string;
-}) {
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${BADGE_VARIANTS[variant]} ${className}`}
-    >
-      {children}
-    </span>
-  );
-}
+/* The app's semantic badge variants live on the shadcn Badge itself so every
+   badge in the app resolves to one component and one variant table. */
+export { Badge, type BadgeVariant } from "@/components/ui/badge";
 
 /** Identifiers (LEI/CIK/CUSIP/ISIN) - tabular figures so they align when
  * stacked. Deliberately not monospace: the UI has one typeface. */

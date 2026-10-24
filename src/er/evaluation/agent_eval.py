@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from er.agent.models import AskResult
 from er.agent.orchestrator import ask, mcp_stdio_params
 from er.config import AppConfig
+from er.knowledge.formulas import FORMULAS
 
 
 class ExpectedFact(BaseModel):
@@ -65,6 +66,44 @@ def load_cases(path: Path) -> list[AgentCase]:
     return [AgentCase.model_validate(raw) for raw in yaml.safe_load(path.read_text())]
 
 
+def _invariant_checks(result: AskResult) -> list[Check]:
+    """The deterministic half of the answer, re-checked here rather than trusted
+    from the pipeline: every gate the submission ran passed, and every derived
+    value recomputes from its own input facts. This is what makes the "hard
+    path" hard - a fluent answer whose arithmetic or units do not hold up fails
+    here even if Jev would say it reads well."""
+    failed_gates = [gate.key for gate in result.gates if not gate.passed]
+    if not result.gates:
+        gates = Check(name="gates_passed", passed=False, message="no gate checks were recorded")
+    else:
+        gates = Check(
+            name="gates_passed",
+            passed=not failed_gates,
+            message=f"failed gates: {', '.join(failed_gates)}" if failed_gates else "",
+        )
+
+    mismatched: list[str] = []
+    for derivation in result.derivations.values():
+        formula = FORMULAS.get(derivation.formula_id)
+        fact = result.facts.get(derivation.fact_id)
+        if formula is None or fact is None:
+            continue
+        try:
+            value = formula.compute(*(float(result.facts[i].value) for i in derivation.inputs))
+            stored = float(fact.value)
+        except (KeyError, TypeError, ValueError):
+            mismatched.append(f"{derivation.fact_id}(non-numeric)")
+            continue
+        if value is None or abs(value - stored) > max(1e-6, abs(stored) * 1e-6):
+            mismatched.append(f"{derivation.fact_id}({stored} != {value})")
+    recompute = Check(
+        name="derivations_recompute",
+        passed=not mismatched,
+        message=f"derivations that do not recompute: {', '.join(mismatched)}" if mismatched else "",
+    )
+    return [gates, recompute]
+
+
 def check_answer(case: AgentCase, result: AskResult, baseline: dict[str, str] | None = None) -> list[Check]:
     cited = {citation.evidence_id for citation in result.citations}
     unresolved = sorted(cited - result.evidence.keys())
@@ -93,6 +132,7 @@ def check_answer(case: AgentCase, result: AskResult, baseline: dict[str, str] | 
             message=f"facts without a cited source: {', '.join(uncited_facts)}" if uncited_facts else "",
         ),
     ]
+    checks.extend(_invariant_checks(result))
     for expected in case.expect_facts:
         values = [str(fact.value) for fact in result.facts.values() if fact.predicate == expected.predicate]
         if not values:

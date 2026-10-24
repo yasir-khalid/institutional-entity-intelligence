@@ -28,6 +28,7 @@ from mcp_types import Tool as MCPTool
 from er.config import REPO_ROOT, AppConfig
 
 from .facts import normalise_placeholders, referenced_fact_ids, render_answer, same_source_value
+from .gates import first_failure, validate_facts
 from .models import AskResult, Citation, Derivation, Evidence, Fact
 from .payloads import fit
 from .retry import error_message, is_transient, timeout
@@ -65,6 +66,10 @@ def _tool_message(name: str, args: dict[str, Any]) -> str:
         return f"Reading ownership and control records for {args.get('entity_id', 'the entity')}"
     if name == "get_beneficial_owners":
         return "Reading Schedule 13D/G beneficial owners"
+    if name == "get_issuer_financials":
+        concept = args.get("tag")
+        what = f"the {concept} series" if concept else "available concepts"
+        return f"Reading as-filed XBRL financials for {args.get('identifier', 'the issuer')} ({what})"
     return f"Calling {name}"
 
 SYSTEM_PROMPT = """You are an assistant answering questions about legal entities \
@@ -92,6 +97,14 @@ cited fact or from the question. Placeholders render with their unit ($1,234 or 
 5.2%), so write the placeholder alone, without your own $ or %. Never compute a number yourself (a change, a \
 percentage, a total): use a derived fact a tool returned, which records the \
 formula and the facts it was computed from.
+
+An issuer's own reported financial statement values (revenue, net income, assets) \
+come from get_issuer_financials, keyed by CIK, ticker or name. Its values are the \
+issuer's own XBRL-tagged facts, each dated by period and by the filing that \
+reported it; when you are asked "as of" a past date, pass as_of and answer from \
+what had been filed by then, not from today's figures. A derived value it returns \
+(a period-over-period change, a ratio, a balance residual) is a fact - cite it \
+rather than computing it yourself.
 
 "Owner", "holder" and "parent" are different relationships here. A 13F holding \
 means the manager reported investment discretion over the position; an N-PORT \
@@ -565,6 +578,34 @@ async def ask(
                     )
                     nudged_to_submit = True
                     continue
+                # The deterministic gates run before the live re-check: they are
+                # pure, so a units/derivation problem is caught without another
+                # tool round-trip, and a rejected submission is fixed (or the
+                # answer is refused) rather than softened by a lower score.
+                used = _used_facts(referenced_fact_ids(args.get("answer", "")), fact_store, derivation_store)
+                gate_checks = validate_facts(used["facts"], used["derivations"])
+                gate_error = first_failure(gate_checks)
+                if gate_error:
+                    await _trace(
+                        lambda span_id: submit_span(
+                            span_id,
+                            _ms(time.monotonic()),
+                            args,
+                            list(evidence_store),
+                            accepted=False,
+                            reason=gate_error,
+                        ),
+                        requested_by=llm_span_id,
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": f"Submission rejected. {gate_error}",
+                        }
+                    )
+                    nudged_to_submit = True
+                    continue
                 await _emit(on_event, {"type": "status", "message": "Re-checking cited source addresses…"})
                 recheck_error = await _recheck_facts(
                     client,
@@ -603,7 +644,8 @@ async def ask(
                     # this is the enforcement point for "never an invented evidence_id."
                     citations=valid_citations,
                     evidence=evidence_store,
-                    **_used_facts(referenced_fact_ids(args.get("answer", "")), fact_store, derivation_store),
+                    gates=gate_checks,
+                    **used,
                 )
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": "submitted"})
                 continue

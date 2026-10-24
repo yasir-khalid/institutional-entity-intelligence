@@ -229,6 +229,9 @@ export interface Fact {
   value: string | number | boolean | null;
   unit: string | null;
   as_of: string | null;
+  /** er.agent.models.ProvenanceClass: "SOURCE_FACT" for a value read from a
+   * record, "DERIVED_FACT" for one a registered formula computed. */
+  provenance_class?: "SOURCE_FACT" | "DERIVED_FACT";
   address: FactAddress;
 }
 
@@ -278,12 +281,25 @@ export interface Verification {
   reason: string | null;
 }
 
+/* One deterministic precondition an answer satisfied before it could be
+   submitted - mirrored from er.api.schemas.GateOut (er.agent.gates). Unlike a
+   verification check this is not a probability: it is a yes/no invariant that
+   had to hold for the answer to be submitted at all. A failed gate rejects the
+   submission outright rather than down-weighting it. */
+export interface Gate {
+  key: string;
+  label: string;
+  passed: boolean;
+  message: string;
+}
+
 export interface AskResponse {
   answer: string;
   citations: Citation[];
   evidence: Record<string, Evidence>;
   facts: Record<string, Fact>;
   derivations: Record<string, Derivation>;
+  gates?: Gate[];
   verification: Verification | null;
 }
 
@@ -332,13 +348,48 @@ export interface AskStreamEvent {
   span?: TraceSpan;
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`);
+export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, { signal, cache: "no-store" });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
   }
   return res.json() as Promise<T>;
+}
+
+export async function workspaceMutation<T>(path: string, body?: unknown, method = "POST"): Promise<T> {
+  const res = await fetch(apiUrl(path), {
+    method, headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(typeof payload.detail === "string" ? payload.detail : `Request failed (${res.status}).`);
+  }
+  window.dispatchEvent(new Event("workspace-updated"));
+  return res.json() as Promise<T>;
+}
+
+export interface InvestigationSummary {
+  id: string; title: string; entity_id: string | null;
+  status: "queued" | "running" | "succeeded" | "failed" | "canceled";
+  created_at: string; updated_at: string;
+}
+export interface Investigation extends InvestigationSummary {
+  trace?: boolean;
+  question: string; attempts: number; error: string | null;
+  events: AskStreamEvent[];
+  turns: { question: string; result: AskResponse; completed_at: string }[];
+}
+export interface SourceCoverage {
+  source: string; label: string; available: boolean; as_of: string | null;
+  quarantined: number; caveat: string; schema_changed?: boolean;
+  tables: { name: string; record_count: number; as_of: string | null; schema: { name: string; type: string }[] }[];
+}
+export interface Coverage {
+  generation: string | null; published_at: string | null; previous_generation: string | null;
+  partial: boolean; warning?: string; sources: SourceCoverage[];
+  decisions: Record<string, number>; indexes: Record<string, { index: string; count: number }>;
 }
 
 export function search(query: string, searchType: SearchType, country?: string): Promise<SearchResponse> {

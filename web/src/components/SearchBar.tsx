@@ -1,7 +1,11 @@
 "use client";
 
-import { ArrowUp, Bot, Loader2, Search } from "lucide-react";
+import { ArrowUp, Bot, Search } from "lucide-react";
 import type { FormEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type ResearchMode = "search" | "agent";
 
@@ -31,7 +35,7 @@ export default function SearchBar({
   return (
     <form onSubmit={submit} className={`prompt-input ${variant === "inline" ? "prompt-input-inline" : ""}`}>
       {variant === "inline" && <Search className="prompt-input-icon" aria-hidden="true" />}
-      <input
+      <Input
         name="query"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
@@ -40,19 +44,27 @@ export default function SearchBar({
         autoComplete="off"
       />
       {variant === "landing" && <div className="prompt-input-footer">
-        <div className="prompt-mode" role="tablist" aria-label="Research mode">
-          <button type="button" role="tab" aria-selected={mode === "search"} onClick={() => onModeChange("search")}
-            className={mode === "search" ? "is-active" : ""}><Search /> Search</button>
-          <button type="button" role="tab" aria-selected={mode === "agent"} onClick={() => onModeChange("agent")}
-            className={mode === "agent" ? "is-active" : ""}><Bot /> Agent</button>
-        </div>
-        <button type="submit" className="prompt-submit" disabled={loading || !query.trim()} aria-label={loading ? "Working" : "Submit"}>
-          {loading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-        </button>
+        <ToggleGroup
+          type="single"
+          value={mode}
+          onValueChange={(value) => value && onModeChange(value as ResearchMode)}
+          className="prompt-mode"
+          aria-label="Research mode"
+        >
+          <ToggleGroupItem value="search" className={mode === "search" ? "is-active" : ""} aria-label="Search">
+            <Search /> Search
+          </ToggleGroupItem>
+          <ToggleGroupItem value="agent" className={mode === "agent" ? "is-active" : ""} aria-label="Agent">
+            <Bot /> Agent
+          </ToggleGroupItem>
+        </ToggleGroup>
+        <Button type="submit" size="icon" className="prompt-submit" disabled={loading || !query.trim()} aria-label={loading ? "Working" : "Submit"}>
+          {loading ? <Spinner /> : <ArrowUp />}
+        </Button>
       </div>}
-      {variant === "inline" && <button type="submit" className="prompt-submit" disabled={loading || !query.trim()} aria-label={loading ? "Searching…" : "Search entities"}>
-        {loading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-      </button>}
+      {variant === "inline" && <Button type="submit" size="icon" className="prompt-submit" disabled={loading || !query.trim()} aria-label={loading ? "Searching…" : "Search entities"}>
+        {loading ? <Spinner /> : <ArrowUp />}
+      </Button>}
     </form>
   );
 }

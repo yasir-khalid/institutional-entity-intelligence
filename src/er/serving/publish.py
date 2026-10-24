@@ -3,23 +3,30 @@ reads at runtime (er.serving.store). Documents are shaped per read - one rich
 document per entity rather than a copy of every table - so a page view is a
 handful of lookups, never a join.
 
-Each index is built under a dated name and swapped in behind its alias only
-once fully loaded, so a failed or partial publish never serves half a dataset.
-The reviews index is never touched here: it is written by the API.
+Every selected index is staged and counted before one atomic alias transaction.
+Full publications have one generation across all serving indexes; --only is
+explicitly marked partial. Previous indexes are retained for rollback.
+Reviews and saved research metadata are never replaced by publication.
 """
 
 from __future__ import annotations
 
 import json
+import fcntl
 import logging
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
 
 import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
 from opensearchpy import OpenSearch, helpers
 
 from er.config import AppConfig
 from er.indexing.opensearch_index import get_client
+from er.serving.coverage import build_coverage
 
 from er.knowledge.build import _openfigi_securities
 
@@ -34,6 +41,10 @@ from .store import (
     OWNERSHIP,
     RELATIONSHIPS,
     SECURITIES,
+    XBRL_FACTS,
+    XBRL_ISSUERS,
+    COVERAGE,
+    DECISIONS,
 )
 
 
@@ -55,6 +66,13 @@ MAPPINGS = {
         "match_decisions": _STORED_ONLY,
         "connections": _STORED_ONLY,
     },
+    DECISIONS: {
+        "node_id": _KEYWORD, "lei": _KEYWORD, "decision": _KEYWORD,
+        "source_name": {"type": "text"}, "source": _KEYWORD,
+        "feature_contributions": _STORED_ONLY,
+    },
+    COVERAGE: {"generation": _KEYWORD, "sources": _STORED_ONLY,
+               "indexes": _STORED_ONLY, "decisions": _STORED_ONLY},
     FILERS: {"cik": _KEYWORD, "lei": _KEYWORD, "top_reported_holdings": _STORED_ONLY},
     HOLDINGS: {
         "cik": _KEYWORD,
@@ -105,6 +123,19 @@ MAPPINGS = {
         "content_hash": _KEYWORD,
         "source_file": _KEYWORD,
         "snapshot_date": _KEYWORD,
+    },
+    XBRL_FACTS: {
+        "cik": _KEYWORD,
+        "tag": _KEYWORD,
+        "unit": _KEYWORD,
+        "entity_name": _KEYWORD,
+        "observations": _STORED_ONLY,
+    },
+    XBRL_ISSUERS: {
+        "cik": _KEYWORD,
+        "entity_name": _KEYWORD,
+        "tickers": _KEYWORD,
+        "former_names": _KEYWORD,
     },
 }
 
@@ -559,6 +590,54 @@ def adv_page_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
         yield f"{row['content_hash']}:{row['page_number']}:{row['source_file']}", row
 
 
+def xbrl_fact_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per (CIK, concept, unit): every dated observation of that concept, so a
+    point-in-time question ("as filed, as of <date>") can be answered from the
+    whole series rather than a latest-value snapshot. Restatements are kept -
+    the same period_end can carry several values, each with the filing that
+    reported it (filed) and its accession number."""
+    path = cfg.sec_xbrl.processed_dir / "sec_xbrl_facts.parquet"
+    if not path.exists():
+        return
+    for row in _rows(f"""
+        SELECT cik, tag, unit, any_value(entity_name) AS entity_name,
+               list(struct_pack(period_start, period_end, fiscal_year, fiscal_period, form,
+                                filed, accession_number, frame, value)
+                    ORDER BY period_end, filed, accession_number) AS observations
+        FROM (
+            SELECT DISTINCT cik, entity_name, tag, unit, period_start, period_end, fiscal_year,
+                            fiscal_period, form, filed, accession_number, frame, value
+            FROM read_parquet('{path}')
+        )
+        GROUP BY cik, tag, unit
+    """):
+        yield f"{row['cik']}:{row['tag']}:{row['unit']}", row
+
+
+def xbrl_issuer_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per issuer CIK: its name and, when EDGAR submissions have been ingested,
+    the tickers and former names the tool resolves a name or ticker to a CIK by."""
+    path = cfg.sec_xbrl.processed_dir / "sec_xbrl_issuers.parquet"
+    if not path.exists():
+        return
+    for row in _rows(f"SELECT * EXCLUDE (ingested_at) FROM read_parquet('{path}')"):
+        yield row["cik"], row
+
+
+def decision_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    path = cfg.sec_13f.processed_dir / "crosswalk_sec_13f_gleif.parquet"
+    if not path.exists():
+        return
+    for row in _rows(f"SELECT * FROM read_parquet('{path}')"):
+        node_id = f"cik:{row['cik']}"
+        contributions = row.get("feature_contributions") or {}
+        if isinstance(contributions, str):
+            contributions = json.loads(contributions)
+        yield node_id, {**row, "node_id": node_id, "source_name": row.get("filer_name"),
+                        "source": "sec_13f_crosswalk", "feature_contributions": contributions,
+                        "decided_on": row.get("snapshot_date")}
+
+
 BUILDERS: dict[str, Callable[[AppConfig], Iterator[tuple[str, dict]]]] = {
     ENTITIES: entity_documents,
     FILERS: filer_documents,
@@ -570,6 +649,9 @@ BUILDERS: dict[str, Callable[[AppConfig], Iterator[tuple[str, dict]]]] = {
     OWNERSHIP: ownership_documents,
     ADV_DOCUMENTS: adv_document_documents,
     ADV_PAGES: adv_page_documents,
+    XBRL_FACTS: xbrl_fact_documents,
+    XBRL_ISSUERS: xbrl_issuer_documents,
+    DECISIONS: decision_documents,
 }
 
 
@@ -580,18 +662,19 @@ def _has_column(path, column: str) -> bool:
     return column in names
 
 
-def _publish_index(client: OpenSearch, cfg: AppConfig, name: str) -> int:
+def _stage_index(client: OpenSearch, cfg: AppConfig, name: str, generation: str,
+                 documents: Iterator[tuple[str, dict]]) -> tuple[str, int]:
     alias = f"{cfg.serving.prefix}_{name}"
-    index = f"{alias}_{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
+    index = f"{alias}_{generation}"
     client.indices.create(
         index=index,
         body={
             "settings": {"number_of_shards": 1, "number_of_replicas": 0, "refresh_interval": "-1"},
-            "mappings": {"dynamic": False, "properties": MAPPINGS[name]},
+            "mappings": {"dynamic": False, "properties": MAPPINGS[name], "_meta": {"generation": generation}},
         },
     )
     actions = (
-        {"_index": index, "_id": doc_id, "_source": doc} for doc_id, doc in BUILDERS[name](cfg)
+        {"_index": index, "_id": doc_id, "_source": doc} for doc_id, doc in documents
     )
     count = 0
     try:
@@ -610,21 +693,131 @@ def _publish_index(client: OpenSearch, cfg: AppConfig, name: str) -> int:
         client.indices.delete(index=index, ignore_unavailable=True)
         raise
 
-    client.indices.put_settings(index=index, body={"index": {"refresh_interval": "1s"}})
-    client.indices.refresh(index=index)
-    previous = list(client.indices.get_alias(name=alias)) if client.indices.exists_alias(name=alias) else []
-    client.indices.update_aliases(
-        body={
-            "actions": [{"remove": {"index": old, "alias": alias}} for old in previous]
-            + [{"add": {"index": index, "alias": alias}}]
-        }
-    )
-    for old in previous:
-        client.indices.delete(index=old)
-    logger.info("%s -> %s (%d documents)", alias, index, count)
-    return count
+    try:
+        client.indices.put_settings(index=index, body={"index": {"refresh_interval": "1s"}})
+        client.indices.refresh(index=index)
+        if client.count(index=index)["count"] != count:
+            raise RuntimeError(f"{name}: staged document count does not reconcile; aliases were not changed")
+    except Exception:
+        client.indices.delete(index=index, ignore_unavailable=True)
+        raise
+    return index, count
+
+
+def _aliases(client: OpenSearch, cfg: AppConfig, names: list[str]) -> dict[str, list[str]]:
+    return {name: sorted(client.indices.get_alias(name=f"{cfg.serving.prefix}_{name}"))
+            if client.indices.exists_alias(name=f"{cfg.serving.prefix}_{name}") else [] for name in names}
+
+
+def _switch(client: OpenSearch, cfg: AppConfig, previous: dict[str, list[str]], indexes: dict[str, dict]) -> None:
+    if _aliases(client, cfg, list(indexes)) != previous:
+        raise RuntimeError("Serving aliases changed during publication. Retry from the current generation.")
+    actions = []
+    for name, entry in indexes.items():
+        alias = f"{cfg.serving.prefix}_{name}"
+        actions.extend({"remove": {"index": old, "alias": alias, "must_exist": True}}
+                       for old in previous[name])
+        # The explicit single-write-index constraint also rejects competing
+        # first publications (no old alias exists to conditionally remove).
+        actions.append({"add": {"index": entry["index"], "alias": alias, "is_write_index": True}})
+    # One OpenSearch alias transaction covers every index, including coverage.
+    client.indices.update_aliases(body={"actions": actions})
+
+
+def _inputs(cfg: AppConfig) -> dict[str, tuple[int, int]]:
+    directories = {cfg.entity.processed_dir, *(getattr(cfg, source).processed_dir
+                   for source in ("gleif", "sec_13f", "sec_submissions", "sec_series_class", "openfigi",
+                                  "nport", "sec_insiders", "sec_adv", "companies_house", "sec_13dg",
+                                  "ffiec_nic", "sec_xbrl"))}
+    return {str(path): (path.stat().st_size, path.stat().st_mtime_ns)
+            for directory in directories for path in directory.glob("*.parquet")}
+
+
+def _manifest(path: Path) -> dict:
+    return json.loads(pq.read_table(path)["document"][0].as_py())
+
+
+def _rollback(cfg: AppConfig, generation: str) -> dict[str, int]:
+    """Restore a retained complete publication; never touch runtime metadata."""
+    if not generation or any(char not in "0123456789abcdef-" for char in generation):
+        raise ValueError("Invalid publication generation")
+    path = cfg.entity.processed_dir / "serving_publications" / f"{generation}.parquet"
+    doc = _manifest(path)
+    if doc.get("partial"):
+        raise ValueError("Rollback requires a complete publication generation")
+    if doc.get("generation") != generation or set(doc["indexes"]) != {*BUILDERS, COVERAGE}:
+        raise ValueError("Publication manifest does not describe a complete generation")
+    if any(entry["index"] != f"{cfg.serving.prefix}_{name}_{generation}"
+           for name, entry in doc["indexes"].items()):
+        raise ValueError("Publication manifest belongs to a different serving prefix")
+    client = get_client(cfg)
+    for name, entry in doc["indexes"].items():
+        if not client.indices.exists(index=entry["index"]):
+            raise ValueError(f"Retained index for {name} is no longer available")
+        if client.count(index=entry["index"])["count"] != entry["count"]:
+            raise ValueError(f"Retained index for {name} no longer reconciles")
+    _switch(client, cfg, _aliases(client, cfg, list(doc["indexes"])), doc["indexes"])
+    return {name: entry["count"] for name, entry in doc["indexes"].items() if name != COVERAGE}
+
+
+def rollback(cfg: AppConfig, generation: str) -> dict[str, int]:
+    directory = cfg.entity.processed_dir / "serving_publications"
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "publish.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _rollback(cfg, generation)
 
 
 def run_all(cfg: AppConfig, only: list[str] | None = None) -> dict[str, int]:
-    client = get_client(cfg)
-    return {name: _publish_index(client, cfg, name) for name in BUILDERS if not only or name in only}
+    names = list(BUILDERS) if not only else list(dict.fromkeys(only))
+    if not names or any(name not in BUILDERS for name in names):
+        raise ValueError("Select at least one known serving index")
+    directory = cfg.entity.processed_dir / "serving_publications"
+    directory.mkdir(parents=True, exist_ok=True)
+    # Serialize publishers using the same build directory. Conditional alias
+    # removals also reject a conflicting publisher on a different machine.
+    with (directory / "publish.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        client = get_client(cfg)
+        generation = uuid4().hex
+        previous = _aliases(client, cfg, names + [COVERAGE])
+        inputs = _inputs(cfg)
+        doc = {**build_coverage(cfg), "generation": generation,
+               "published_at": datetime.now(timezone.utc).isoformat(),
+               "partial": len(names) != len(BUILDERS), "previous_generation": None, "indexes": {}}
+        # Previous source profiles come from the build-time manifest, never
+        # from a serving document treated as the system of record.
+        if previous[COVERAGE]:
+            prior_generation = previous[COVERAGE][0].removeprefix(f"{cfg.serving.prefix}_{COVERAGE}_")
+            prior_path = directory / f"{prior_generation}.parquet"
+            if prior_path.exists():
+                prior = _manifest(prior_path)
+                doc["previous_generation"] = prior_generation
+                prior_sources = {source["source"]: source for source in prior["sources"]}
+                for source in doc["sources"]:
+                    old = prior_sources.get(source["source"], {})
+                    source["schema_changed"] = bool(old.get("tables")) and (
+                        [(t["name"], t["schema"]) for t in source["tables"]] !=
+                        [(t["name"], t["schema"]) for t in old.get("tables", [])])
+        staged = []
+        try:
+            for name in names:
+                index, count = _stage_index(client, cfg, name, generation, BUILDERS[name](cfg))
+                staged.append(index)
+                doc["indexes"][name] = {"index": index, "count": count}
+            doc["indexes"][COVERAGE] = {"index": f"{cfg.serving.prefix}_{COVERAGE}_{generation}", "count": 1}
+            coverage_index, _ = _stage_index(client, cfg, COVERAGE, generation, iter([("current", doc)]))
+            staged.append(coverage_index)
+            if _inputs(cfg) != inputs:
+                raise RuntimeError("Processed inputs changed during publication; aliases were not changed. Retry after the build finishes.")
+            pq.write_table(pa.Table.from_pylist([{"generation": generation, "document": json.dumps(doc)}]),
+                           directory / f"{generation}.parquet")
+        except Exception:
+            for index in staged:
+                client.indices.delete(index=index, ignore_unavailable=True)
+            raise
+        # An ambiguous transport failure here must leave staged indexes intact:
+        # the alias transaction may already have committed on the server.
+        _switch(client, cfg, previous, doc["indexes"])
+        logger.info("Published generation %s; previous indexes retained for rollback", generation)
+        return {name: entry["count"] for name, entry in doc["indexes"].items() if name != COVERAGE}

@@ -144,6 +144,7 @@ class FactOut(BaseModel):
     value: str | int | float | bool | None
     unit: str | None = None
     as_of: str | None = None
+    provenance_class: str = "SOURCE_FACT"
     address: FactAddressOut
 
 
@@ -162,6 +163,17 @@ class ToolResultOut(BaseModel):
     evidence: list[EvidenceOut] = []
     facts: list[FactOut] = []
     derivations: list[DerivationOut] = []
+
+
+class GateOut(BaseModel):
+    """One deterministic precondition an answer passed before submission - see
+    er.agent.gates. Unlike a verification check, this is not a probability: it
+    is a yes/no invariant the answer had to satisfy to be submitted at all."""
+
+    key: str
+    label: str
+    passed: bool
+    message: str = ""
 
 
 class CitationOut(BaseModel):
@@ -221,6 +233,7 @@ class AskResponse(BaseModel):
     evidence: dict[str, EvidenceOut] = {}
     facts: dict[str, FactOut] = {}
     derivations: dict[str, DerivationOut] = {}
+    gates: list[GateOut] = []
     verification: VerificationOut | None = None
 
 
@@ -305,3 +318,15 @@ class EntityDetail(BaseModel):
     subsidiary_count: int = 0
     connections: EntityConnectionsOut = EntityConnectionsOut()
     match_decisions: list[MatchDecisionOut] = []
+
+
+class InvestigationRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    request_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{8,80}$")
+    investigation_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{8,80}$")
+    entity_id: str | None = Field(default=None, max_length=100)
+    trace: bool = False
+
+
+class InvestigationTitle(BaseModel):
+    title: str = Field(min_length=1, max_length=120)

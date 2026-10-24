@@ -1,136 +1,89 @@
-# Institutional Entity Intelligence - Web UI
+# Institutional Entity Intelligence — Web workspace
 
-A Next.js frontend over the Python entity-resolution engine, via a thin FastAPI
-backend (`src/er/api/app.py`, in the repo root). This app owns no
-entity-resolution logic itself - it searches, shows an entity profile, and
-streams agent answers with their evidence.
+A Next.js frontend over the existing FastAPI entity-resolution and MCP agent
+boundaries. The web never reads Parquet or OpenSearch directly.
 
-## Run it
-
-Two processes, both from the **repo root** unless noted:
+## Run
 
 ```bash
-make api                 # FastAPI backend on http://localhost:8000
-cd web && npm run dev    # Next.js dev server (picks 3000, or the next free port)
+make publish             # root: populate serving, decisions and measured coverage
+make api                 # root: FastAPI on localhost:8000
+cd web
+npm ci
+npm run dev
 ```
 
-Copy `.env.local.example` to `.env.local` first if `NEXT_PUBLIC_API_URL` needs
-to point somewhere other than `http://localhost:8000`.
+Copy `.env.local.example` to `.env.local` if the API URL needs changing.
+`OPENROUTER_API_KEY` in the root environment is required for research, but
+not for entity/profile/review/coverage reads. Keep this shared, unauthenticated
+workspace localhost-only.
 
-Requires live OpenSearch (see the root `README.md`'s Quickstart) - this UI is a
-view over the same serving data, not a separate pipeline. The optional Form ADV
-PDF endpoint also needs access to its locally mounted source ZIPs.
+## Routes
 
-## How to use it
+- `/`: start research and browse saved investigations.
+- `/research/{id}`: saved conversation, sourced answers, progress, rename,
+  follow-ups, stop/retry and developer trace. Server persistence survives a
+  browser reload; interrupted workers recover via leases.
+- `/entities?q=...&type=name|lei|cusip&country=GB`: URL-backed search with an
+  adjustable results/inspector split on desktop and stacked panes on mobile.
+- `/entities/{LEI}?tab=overview|relationships|holdings|resolution`: shareable
+  dossier with identifiers, accounting tree, typed ownership/control,
+  latest reported 13F/N-PORT activity and immutable match-decision evidence.
+- `/reviews`: paginated SEC 13F crosswalk queue with append-only human reviews.
+- `/coverage`: published source counts, observed dates, schemas/quarantine
+  information and serving generations.
+- `/how-it-works`: existing architecture explanation.
 
-The page is one composer with two modes, **Search** and **Agent**, plus a few
-suggested queries until you run one.
+Reviews take effect in graph links only after `make pull-reviews`, graph
+rebuild and publication. An unmatched record is not silently promoted to an LEI.
+Reported activity retains its source-specific exclusions and dates. Saved
+answers retain citations, addressed facts, formula inputs and verification;
+no second agent or matching implementation was added.
+Developer trace collection is explicitly opt-in before starting a question or
+follow-up. The source rail preserves each answer's own fact/evidence maps.
 
-**Search** resolves a name through the matcher and lists the candidates with
-their jurisdiction, LEI and decision (Resolved / Review / Candidate). The raw
-retrieval score is deliberately not shown: it is an unnormalised BM25 value
-and the list is already ordered by it. Opening a candidate loads its **entity
-profile** (`EntityProfile.tsx`) below the list:
+## Components and visual system
 
-- **Identifiers**, and the records in other sources linked to this LEI (a
-  13F CIK, an FFIEC RSSD, a Companies House number).
-- **How other records were linked**: each crosswalk decision with its score,
-  gap to the runner-up (clickable), per-feature points and matching config
-  fingerprint, plus its human reviews and a Confirm / Reject form
-  (`POST /api/reviews`). A review is stored as its own row, never an edit, and
-  changes the graph link on the next `make build-knowledge-graph`.
-- **Ownership & control** from the knowledge graph, one group per kind of
-  claim: Schedule 13D/G beneficial owners, FFIEC NIC bank control, Companies
-  House PSC, Forms 3/4/5 insiders and LEI successions. 13D/G and insider rows
-  link to the filing on EDGAR. A succeeded LEI shows a "Succeeded by" link.
-- **Latest reported 13F holdings**, with the coverage caveat and warnings for
-  quarantined filings or values that look like thousands. Opening a holding
-  loads its position across recent reports (`GET /api/positions/{cik}/{cusip}`).
-  Each total and change has a formula toggle that unfolds to the filed
-  information-table rows and their EDGAR filing.
-- **Latest N-PORT report**, when the entity is a registered fund series: net
-  assets, holding count and the ten largest holdings by USD value with their
-  share of net assets, linked to the filing on EDGAR. N-PORT covers the whole
-  portfolio but is a dated snapshot made public 60 days late, and says so.
+`WorkspaceShell` owns the responsive shadcn sidebar and Cmd/Ctrl-K palette.
+`EntityWorkspace`, `EntityPage`, `InvestigationView` and `ReviewQueue` own
+their route-level interactions. `useResource` cancels stale HTTP reads and
+polls only active saved jobs. Research mutations carry retry-safe operation IDs.
 
-The GLEIF hierarchy shows as parent and child counts only. The indented tree
-(`EntityTreeView.tsx`, below) is kept but not mounted since the restyle.
+The official shadcn Radix registry is configured in `components.json`;
+primitives live in `src/components/ui/`. Existing domain-specific presentation
+(`EntityProfile`, `EntityTreeView`, `EvidenceLayer`, `FactValues`,
+`Markdown`, `VerificationBadge` and `DeveloperPanel`) is retained.
+The design keeps Geist, tabular figures, square corners, white surfaces,
+hairline borders and the blue accent. shadcn roles map onto those semantic
+tokens. Secondary workspace/evidence labels meet contrast checks; sidebar
+navigation, dialogs and tabs provide keyboard/mobile behavior.
 
-**Agent** streams from `POST /api/ask/stream` (SSE). While the model works the
-page shows a live research feed - one line per step, e.g. "Searching name
-for …" - and replaces it with the answer, rendered as Markdown with clickable
-`[n]` citations. The **Sources & method** rail lists every evidence record the
-answer cites: source, criteria, record count, as-of date, and the addressed
-values it supplied, with a link to the original filing when there is one. A
-calculated value shows its formula and inputs down to the filed rows. Each
-answer closes with Jev's verification badge. Follow-up questions keep the
-conversation. Requires `OPENROUTER_API_KEY` in the repo root's `.env`; without
-it the request fails with a clear error rather than silently.
+## Checks
 
-The **Developer** toggle in the header opens a trace of the last agent run:
-one span per model call, tool call, submission attempt and verifier pass, with
-arguments, payload previews, token usage and why a submission was rejected.
-Its open state survives reloads.
-
-## Structure
-
-```
-src/
-├── app/
-│   ├── layout.tsx             # loads Inter + JetBrains Mono as CSS variables
-│   ├── globals.css            # Tailwind v4 @theme tokens, .tabular, .scroll-thin
-│   └── page.tsx               # the only route - query composer (Search/Agent),
-│                                streaming agent answer, results, entity profile
-├── components/
-│   ├── ui.tsx                 # shared primitives: SectionLabel, Badge, Mono,
-│   │                            Field/FieldGrid - the single source of truth
-│   │                            for type scale, badge colours and label style
-│   ├── SearchBar.tsx          # query composer + Search/Agent mode switch
-│   ├── EntityProfile.tsx      # the entity profile: identifiers, link
-│   │                            decisions + reviews, ownership & control,
-│   │                            13F holdings with position history
-│   ├── FactValues.tsx         # addressed values, formulas and their inputs
-│   ├── EvidenceLayer.tsx      # the Sources & method evidence rail
-│   ├── CitationChip.tsx       # inline [n] citation marker
-│   ├── Markdown.tsx           # renders agent answers as Markdown (GFM) and
-│   │                            turns inline [n] markers into citation links
-│   ├── VerificationBadge.tsx  # Jev's verdict and per-check meters
-│   ├── DeveloperPanel.tsx     # trace tree of the last agent run
-│   └── EntityTreeView.tsx     # spanning-tree GLEIF hierarchy as an indented
-│                                list - not mounted since the restyle
-└── lib/api.ts                 # typed fetch client - mirrors src/er/api/schemas.py exactly
+```bash
+npm run lint
+npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
-## Design system
+Browser tests launch an isolated real FastAPI app with MemoryStore and a
+substituted model/MCP boundary on 8100, plus Next on 3100. No paid model or live
+OpenSearch writes occur. Desktop/mobile checks exercise saved research,
+reload/follow-up/rename, stop/retry, entity tabs, reviews, coverage, command
+navigation, axe accessibility and horizontal overflow. Screenshots/traces are
+written under gitignored `test-results/`.
+If another local application uses the defaults, select free ports without reusing
+or stopping its servers:
 
-Deliberately small, so the UI stays coherent without a component library:
+```bash
+ER_E2E_WEB_PORT=3137 ER_E2E_API_PORT=8137 npm run test:e2e
+```
 
-- **Type**: one superfamily - IBM Plex Sans for UI, IBM Plex Mono for
-  identifiers (LEI, CIK, CUSIP). They were drawn together and share vertical
-  metrics, so an identifier sits on the same baseline as the label beside it,
-  and Plex was designed for dense technical interfaces rather than being a
-  default. Every figure a reader might compare down a column - dates, counts,
-  dollar values, IDs - carries `.tabular` (`font-variant-numeric: tabular-nums`)
-  so digits line up.
-- **Colour**: named tokens in `globals.css`, not per-component slates. Text is
-  a four-step ramp - `ink` (headings, values), `ink-muted` (body), `ink-subtle`
-  (labels, identifiers), `ink-faint` (decoration only, never text) - and every
-  text step clears WCAG AA on `surface`. One accent (indigo) carries selection,
-  focus and the query marker; two semantic hues mean direction, not decoration
-  (`upward` = parent/manager, `downward` = subsidiary/fund); amber and rose are
-  reserved for caveats and errors.
-- **Icons**: `lucide-react` throughout - no emoji anywhere in the UI.
-- **Loading**: motion lives in exactly one place - a 2px indeterminate line at
-  the top of the pane. The placeholders under it never animate and reproduce
-  the real geometry column for column (same 44px rows, same jurisdiction /
-  identifier / decision widths, same tree indent depths), so a load previews
-  the layout that is arriving instead of decorating the wait.
-- **Alignment**: the tree and details panes are cards with identical 44px
-  header bars, so their frames, headings and content start on the same
-  baseline; label/value pairs use one shared `FieldGrid` column width. The
-  details pane is fluid (`clamp(25rem, 30vw, 34rem)`) so a wide screen gives it
-  real room rather than stranding it at a fixed width beside a mostly-empty
-  tree.
+The harness still refuses occupied endpoints; port overrides do not enable server reuse.
+
+See [workspace operations](../docs/workspace.md) for publication/rollback,
+research backups, recovery semantics and deployment limitations.
 
 ## Design history
 

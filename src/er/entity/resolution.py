@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from er.serving.store import ENTITIES, REVIEWS, Store
+from er.serving.store import DECISIONS, ENTITIES, REVIEWS, Store
 
 from .models import MatchDecisionRecord, MatchReview
 
@@ -73,3 +73,22 @@ def load_match_decisions(store: Store, lei: str) -> list[MatchDecisionRecord]:
         )
         for decision in decisions
     ]
+
+
+def review_queue(store: Store, decision: str = "REVIEW", offset: int = 0, limit: int = 50) -> dict:
+    """Published decisions plus append-only reviews of the displayed pairs.
+
+    Pagination is bounded by the Store's small result-window contract; review
+    status does not overwrite or silently suppress a machine decision.
+    """
+    if decision not in ("REVIEW", "AUTO_MATCH", "UNMATCHED"):
+        raise ValueError("Unknown match decision")
+    rows = store.find(DECISIONS, where={"decision": decision}, sort=(("node_id", "asc"),),
+                      size=offset + limit + 1)
+    page = rows[offset:offset + limit]
+    reviews = store.find(REVIEWS, where={"node_id": [row["node_id"] for row in page]},
+                         sort=(("reviewed_at", "asc"),), size=10_000) if page else []
+    items = [{**row, "reviews": [review for review in reviews
+                                  if (review["node_id"], review["lei"]) == (row["node_id"], row.get("lei"))]}
+             for row in page]
+    return {"items": items, "next_offset": offset + limit if len(rows) > offset + limit else None}

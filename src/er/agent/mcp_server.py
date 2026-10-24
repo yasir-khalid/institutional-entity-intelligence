@@ -20,6 +20,7 @@ from er.agent.tools import search_entity as _search_entity
 from er.agent.tools import get_beneficial_owners as _get_beneficial_owners
 from er.agent.tools import get_entity_connections as _get_entity_connections
 from er.agent.tools import get_fund_structure as _get_fund_structure
+from er.agent.tools import get_issuer_financials as _get_issuer_financials
 from er.agent.tools import get_security as _get_security
 from er.agent.tools import get_position_history as _get_position_history
 from er.agent.tools import search_adv_documents as _search_adv_documents
@@ -34,7 +35,10 @@ mcp = MCPServer(
         "you don't already have an entity_id (a GLEIF LEI); use get_entity_profile, "
         "get_relationship_hierarchy and get_entity_connections once you do. get_position_history and get_beneficial_owners take SEC CIKs, which "
         "get_entity_profile returns for 13F filers. get_fund_structure answers which series and "
-        "share classes a fund registrant has; get_security says what a CUSIP, ticker or FIGI is."
+        "share classes a fund registrant has; get_security says what a CUSIP, ticker or FIGI is. "
+        "get_issuer_financials reports an issuer's own as-filed financial statement values "
+        "(revenue, net income, assets) by CIK, ticker or name, with the change between periods "
+        "and the balance-sheet identity already computed by registered formulas."
     ),
 )
 
@@ -124,6 +128,24 @@ def get_security(identifier: str, id_type: str = "cusip") -> ToolResult:
     one; "no_match" means OpenFIGI didn't recognise it. Only CUSIPs that
     appear in 13F filings are covered."""
     return _get_security(get_store(load_config()), identifier, id_type=id_type)
+
+
+@mcp.tool()
+def get_issuer_financials(
+    identifier: str, id_type: str = "cik", tag: str | None = None, as_of: str | None = None, periods: int = 4
+) -> ToolResult:
+    """An issuer's own as-reported financial statement values from SEC XBRL
+    company facts (revenue, net income, assets, ...). id_type is one of "cik",
+    "ticker" or "name". Without a tag, returns the concepts available and each
+    one's latest value; with a tag (e.g. "Assets", "Revenues", "NetIncomeLoss"),
+    returns recent observations, each dated by the period and the filing that
+    reported it, plus a derived period-over-period change and the balance-sheet
+    identity Assets = LiabilitiesAndStockholdersEquity where the inputs exist.
+    Pass as_of (YYYY-MM-DD) to see only what had been filed by that date.
+    Derived values are facts - cite them rather than computing them yourself."""
+    return _get_issuer_financials(
+        get_store(load_config()), identifier, id_type=id_type, tag=tag, as_of=as_of, periods=periods
+    )
 
 
 def run() -> None:

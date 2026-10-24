@@ -38,6 +38,7 @@ from er.api.schemas import (
     DerivationOut,
     EvidenceOut,
     FactOut,
+    GateOut,
     MatchDecisionOut,
     MatchReviewOut,
     NPortFundReportOut,
@@ -49,17 +50,21 @@ from er.api.schemas import (
     ToolResultOut,
     TreeNode,
     VerificationOut,
+    InvestigationRequest,
+    InvestigationTitle,
 )
 from er.config import AppConfig, load_config
 from er.datasources.sec_adv.search import load_document
 from er.agent.tools import get_position_history
 from er.entity.connections import load_connections
 from er.entity.profile import get_entity_profile
-from er.entity.resolution import load_match_decisions, record_review
+from er.entity.resolution import load_match_decisions, record_review, review_queue
 from er.entity.search import match_result_to_matches, search_by_cusip, search_by_lei, search_by_name
 from er.graph.build import build_hierarchy_tree
 from er.graph.models import HierarchyNode
 from er.serving.store import MissingIndexError, get_store
+from er.serving.coverage import load_coverage
+from er.workspace import research
 
 logger = logging.getLogger(__name__)
 
@@ -170,9 +175,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.mcp_client = await _connect_mcp_client()
     except Exception:
         logger.exception("Could not start the entity-intelligence MCP server - /api/ask will be unavailable")
-    yield
-    if app.state.mcp_client is not None:
-        await app.state.mcp_client.__aexit__(None, None, None)
+    background = asyncio.create_task(research.worker(lambda: get_store(_cfg()), _cfg().workspace, _saved_runner))
+    try:
+        yield
+    finally:
+        background.cancel()
+        await asyncio.gather(background, return_exceptions=True)
+        if app.state.mcp_client is not None:
+            await app.state.mcp_client.__aexit__(None, None, None)
 
 
 app = FastAPI(title="Institutional Entity Intelligence API", lifespan=lifespan)
@@ -183,7 +193,7 @@ app.add_middleware(
     # 3000 is taken by another project. This API has no auth yet, so it must
     # never be exposed to non-localhost origins as-is.
     allow_origin_regex=r"http://localhost:\d+",
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["*"],
 )
 
@@ -206,6 +216,11 @@ mount_a2a(app, _ask_for_a2a, _cfg().a2a_public_url, _cfg().a2a_api_key)
 @app.exception_handler(MissingIndexError)
 async def missing_index(_: Request, exc: MissingIndexError) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(research.ResearchConflict)
+async def research_conflict(_: Request, exc: research.ResearchConflict) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 SEARCH_TYPES = ("name", "lei", "cusip")
@@ -381,6 +396,79 @@ def add_review(body: ReviewRequest) -> MatchReviewOut:
     return MatchReviewOut(**review.model_dump())
 
 
+@app.get("/api/reviews")
+def reviews(decision: str = Query("REVIEW"), offset: int = Query(0, ge=0, le=9000),
+            limit: int = Query(50, ge=1, le=100)) -> dict:
+    try:
+        result = review_queue(get_store(_cfg()), decision, offset, limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**result, "items": [MatchDecisionOut(**item).model_dump() for item in result["items"]]}
+
+
+@app.get("/api/coverage")
+def coverage() -> dict:
+    return load_coverage(get_store(_cfg()))
+
+
+def _investigation_out(doc: dict) -> dict:
+    return {key: value for key, value in doc.items() if key not in ("lease_owner", "lease_until", "revision")}
+
+
+def _investigation(investigation_id: str) -> dict:
+    try:
+        return research.get_investigation(get_store(_cfg()), investigation_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Investigation not found") from exc
+
+
+@app.get("/api/investigations")
+def investigations(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0, le=9000)) -> dict:
+    items = research.list_investigations(get_store(_cfg()), limit + 1, offset)
+    return {"items": items[:limit], "next_offset": offset + limit if len(items) > limit else None}
+
+
+@app.get("/api/investigations/{investigation_id}")
+def investigation(investigation_id: str) -> dict:
+    return _investigation_out(_investigation(investigation_id))
+
+
+@app.post("/api/investigations", status_code=202)
+def start_investigation(body: InvestigationRequest) -> dict:
+    try:
+        doc = research.enqueue(get_store(_cfg()), _cfg().workspace, body.question, body.request_id,
+                               body.investigation_id, body.entity_id, body.trace)
+    except KeyError as exc:
+        raise HTTPException(404, "Investigation not found") from exc
+    except research.ResearchConflict:
+        raise
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _investigation_out(doc)
+
+
+@app.post("/api/investigations/{investigation_id}/retry", status_code=202)
+def retry_investigation(investigation_id: str) -> dict:
+    _investigation(investigation_id)
+    return _investigation_out(research.retry(get_store(_cfg()), investigation_id))
+
+
+@app.post("/api/investigations/{investigation_id}/stop")
+def stop_investigation(investigation_id: str) -> dict:
+    _investigation(investigation_id)
+    return _investigation_out(research.cancel(get_store(_cfg()), investigation_id))
+
+
+@app.patch("/api/investigations/{investigation_id}")
+def rename_investigation(investigation_id: str, body: InvestigationTitle) -> dict:
+    try:
+        return _investigation_out(research.rename(get_store(_cfg()), _investigation(investigation_id), body.title))
+    except research.ResearchConflict:
+        raise
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/sources/sec-adv/{pdf_file_name}")
 def sec_adv_document(pdf_file_name: str) -> Response:
     content = load_document(_cfg(), get_store(_cfg()), pdf_file_name)
@@ -402,6 +490,24 @@ def _verification_out(result: AgentAskResult) -> VerificationOut | None:
     return VerificationOut(**result.verification.model_dump(exclude={"usage"}))
 
 
+async def _saved_runner(job: dict, on_event: Callable[[dict], Awaitable[None]]) -> dict:
+    history = [turn for saved in job["turns"][-4:] for turn in (
+        {"role": "user", "content": saved["question"]},
+        {"role": "assistant", "content": saved["result"]["answer"]},
+    )]
+    result = await _run_agent(AskRequest(question=job["question"], entity_id=job.get("entity_id"),
+                                         history=history, trace=job.get("trace", False)), on_event=on_event)
+    return AskResponse(
+        answer=result.answer,
+        citations=[CitationOut(marker=c.marker, evidence_id=c.evidence_id) for c in result.citations],
+        evidence={k: EvidenceOut(**v.model_dump()) for k, v in result.evidence.items()},
+        facts={k: FactOut(**v.model_dump()) for k, v in result.facts.items()},
+        derivations={k: DerivationOut(**v.model_dump()) for k, v in result.derivations.items()},
+        gates=[GateOut(**g.model_dump()) for g in result.gates],
+        verification=_verification_out(result),
+    ).model_dump()
+
+
 @app.post("/api/ask", response_model=AskResponse)
 async def ask_question(body: AskRequest) -> AskResponse:
     """Answer a question about an entity via er.agent.orchestrator, which
@@ -420,6 +526,7 @@ async def ask_question(body: AskRequest) -> AskResponse:
         evidence={k: EvidenceOut(**v.model_dump()) for k, v in result.evidence.items()},
         facts={k: FactOut(**v.model_dump()) for k, v in result.facts.items()},
         derivations={k: DerivationOut(**v.model_dump()) for k, v in result.derivations.items()},
+        gates=[GateOut(**g.model_dump()) for g in result.gates],
         verification=_verification_out(result),
     )
 

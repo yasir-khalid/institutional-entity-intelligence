@@ -28,3 +28,30 @@
     - predicate: position.change:594918104
     - predicate: position.percent_change:594918104
   expect_sources: [Calculated from 13F]
+
+# SEC XBRL company facts (er.datasources.sec_xbrl): an issuer's own as-filed
+# financial statement values, resolved by CIK/ticker/name. Values move between
+# snapshots, so only the predicate is pinned.
+- id: xbrl-latest-assets
+  question: For Dell Technologies (CIK 0001571996), what were the total assets it reported in its most recent filing, and for which period?
+  expect_facts:
+    - predicate: xbrl.Assets
+  expect_sources: [SEC XBRL company facts]
+
+- id: xbrl-assets-change
+  question: For Dell Technologies (CIK 0001571996), how did its reported total assets change between its two most recent reports, as a percentage?
+  expect_facts:
+    - predicate: xbrl.Assets.percent_change
+  expect_sources: [Calculated from SEC XBRL]
+
+- id: xbrl-balance-identity
+  question: Does Dell Technologies' (CIK 0001571996) most recent balance sheet balance - does Assets equal Liabilities plus Stockholders' Equity?
+  expect_facts:
+    - predicate: xbrl.balance_residual
+  expect_sources: [SEC XBRL company facts]
+
+- id: xbrl-point-in-time
+  question: As of 2024-06-01, what total assets had Dell Technologies (CIK 0001571996) reported to the SEC?
+  expect_facts:
+    - predicate: xbrl.Assets
+  expect_sources: [SEC XBRL company facts]

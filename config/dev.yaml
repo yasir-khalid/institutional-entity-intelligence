@@ -57,6 +57,16 @@ ffiec_nic:
   raw_dir: data/raw/ffiec_nic
   processed_dir: data/processed
 
+sec_xbrl:
+  raw_dir: data/raw/sec_xbrl
+  processed_dir: data/processed
+  # Leave ciks empty to fetch the issuers named most often in the 13D/G and
+  # Forms 3/4/5 tables already processed, capped by max_issuers. data.sec.gov
+  # rate-limits, so this is deliberately a bounded set, not every filer.
+  ciks: []
+  max_issuers: 40
+  requests_per_second: 8
+
 entity:
   processed_dir: data/processed
 
@@ -70,6 +80,14 @@ opensearch:
 
 search:
   default_size: 20
+
+workspace:
+  poll_seconds: 2
+  lease_seconds: 90
+  heartbeat_seconds: 15
+  max_attempts: 3
+  max_turns: 50
+  max_events: 100
 
 benchmark:
   output_dir: data/benchmark

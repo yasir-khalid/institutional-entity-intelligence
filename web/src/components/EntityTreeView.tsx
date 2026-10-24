@@ -125,13 +125,13 @@ function Branch({
           )}
 
           {hasChildren && !expanded && (
-            <Badge variant="neutral" className="hidden sm:inline-flex">
+            <Badge variant="neutral" className="hidden rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:inline-flex">
               {node.children.length} related
             </Badge>
           )}
 
           {node.isRoot && (
-            <Badge variant="accent" className="ml-0.5">
+            <Badge variant="accent" className="ml-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
               Query
             </Badge>
           )}

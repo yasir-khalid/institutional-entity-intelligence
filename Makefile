@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help ingest-gleif ingest-sec-13f ingest-sec-submissions ingest-sec-series-class ingest-openfigi ingest-nport ingest-sec-insiders ingest-sec-adv ingest-companies-house ingest-sec-13dg ingest-ffiec-nic index validate benchmark pipeline test evaluate crosswalk-sec-13f build-entities build-knowledge-graph evaluate-agent publish pull-reviews
+.PHONY: help ingest-gleif ingest-sec-13f ingest-sec-submissions ingest-sec-series-class ingest-openfigi ingest-nport ingest-sec-insiders ingest-sec-adv ingest-companies-house ingest-sec-13dg ingest-ffiec-nic ingest-sec-xbrl index validate benchmark pipeline test evaluate crosswalk-sec-13f build-entities build-knowledge-graph evaluate-agent publish pull-reviews
 
 help:
 	@echo "Institutional Entity Intelligence - available targets:"
@@ -20,6 +20,7 @@ help:
 	@echo "    make ingest-companies-house Parse downloaded company and PSC snapshots"
 	@echo "    make ingest-sec-13dg Download/parse structured Schedule 13D/G filings (~40 min a quarter)"
 	@echo "    make ingest-ffiec-nic Parse downloaded FFIEC NIC bank hierarchy CSVs"
+	@echo "    make ingest-sec-xbrl Fetch SEC XBRL company facts for issuers named in 13D/G and Forms 3/4/5"
 	@echo ""
 	@echo "  Shared pipeline (source-agnostic - runs after any/all ingest-* targets):"
 	@echo "    make index           Bulk-load GLEIF entities into OpenSearch (~20 min)"
@@ -87,6 +88,9 @@ ingest-sec-13dg:
 
 ingest-ffiec-nic:
 	uv run python -m er.cli.ingest_ffiec_nic
+
+ingest-sec-xbrl:
+	uv run python -m er.cli.ingest_sec_xbrl
 
 INGEST_TARGETS := ingest-gleif ingest-sec-13f
 

@@ -149,7 +149,12 @@ cp .env.example .env   # OPENSEARCH_URL, plus OPENROUTER_API_KEY for the agent
 
 make pipeline          # GLEIF + 13F ingest, index, validate, benchmark
 make crosswalk-sec-13f && make build-entities && make build-knowledge-graph
-make publish           # Parquet -> OpenSearch serving indexes
+make publish           # stage all serving indexes, validate, atomically publish one generation
+
+# Optional: SEC XBRL company facts (as-filed financial values, keyed by CIK) -
+# fetches the issuers named in the 13D/G and Forms 3/4/5 tables already processed
+make ingest-sec-xbrl
+uv run python -m er.cli.publish --only xbrl_facts --only xbrl_issuers
 ```
 
 Then:
@@ -161,7 +166,7 @@ uv run python -m er.cli.family --name "Point72"
 uv run python -m er.cli.ask --entity-id 254900ESP1ZKG7UNS007 --question "What is its registration status?"
 
 make api                 # FastAPI on :8000, also the A2A agent endpoint
-cd web && npm run dev    # the web UI
+cd web && npm ci && npm run dev    # the research workspace
 curl -s localhost:8000/.well-known/agent-card.json   # A2A agent card
 ```
 
@@ -170,6 +175,23 @@ make test                # unit tests, no live services, ~5s
 make evaluate            # matcher vs. the full benchmark, needs OpenSearch
 make evaluate-agent      # agent answers vs. config/agent_eval_cases.yaml
 ```
+
+The workspace has saved investigations, shareable entity dossiers, a match-review
+queue and a measured coverage inventory. Existing deployments need one full
+`make publish` to populate the new decision/coverage indexes. Source data stays
+in Parquet; reviews and saved research are runtime-authored exceptions and need
+backups before removing OpenSearch. Keep the unauthenticated API localhost-only.
+
+```bash
+uv run python -m er.cli.publish --rollback GENERATION  # a retained complete generation
+uv run python -m er.cli.research_backup --export data/backups/research-2026-10-11.parquet
+uv run python -m er.cli.research_backup --restore data/backups/research-2026-10-11.parquet
+cd web && npm run lint && npm run build
+cd web && npx playwright install chromium && npm run test:e2e  # isolated API/model fixtures
+```
+
+See [workspace operations](docs/workspace.md) for leases, recovery, publication
+retention and verification boundaries.
 
 ## More
 

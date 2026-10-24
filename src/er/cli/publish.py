@@ -1,8 +1,8 @@
 """CLI: python -m er.cli.publish [--only entities --only 13f_holdings ...]
 
 Builds the OpenSearch serving indexes the API reads from processed Parquet
-(er.serving.publish). Each index is loaded under a new name and swapped in
-behind its alias only when complete.
+(er.serving.publish). Every selected index is staged and validated before one
+atomic alias switch; complete generations remain available for --rollback.
 """
 
 from __future__ import annotations
@@ -15,19 +15,22 @@ from rich.console import Console
 from rich.table import Table
 
 from er.config import load_config
-from er.serving.publish import BUILDERS, run_all
+from er.serving.publish import BUILDERS, rollback, run_all
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Publish processed Parquet to the OpenSearch serving indexes")
-    parser.add_argument("--only", action="append", choices=list(BUILDERS), help="publish just this index; repeatable")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--only", action="append", choices=list(BUILDERS), help="publish just this index; repeatable; recorded as a partial generation")
+    group.add_argument("--rollback", metavar="GENERATION", help="restore a retained complete generation")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     logging.getLogger("opensearch").setLevel(logging.WARNING)
 
     console = Console()
     started = time.monotonic()
-    counts = run_all(load_config(), only=args.only)
+    with console.status("Restoring generation…" if args.rollback else "Staging and validating publication…"):
+        counts = rollback(load_config(), args.rollback) if args.rollback else run_all(load_config(), only=args.only)
     table = Table(title="Published")
     table.add_column("Index")
     table.add_column("Documents", justify="right")

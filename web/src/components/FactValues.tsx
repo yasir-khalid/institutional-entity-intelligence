@@ -1,7 +1,8 @@
 "use client";
 
 import { ExternalLink, Sigma } from "lucide-react";
-import { apiUrl, type Derivation, type Fact } from "@/lib/api";
+import { apiUrl, type Derivation, type Evidence, type Fact } from "@/lib/api";
+import LineageChain from "@/components/LineageChain";
 
 /* ---------------------------------------------------------------------------
    Addressed values (er.agent.models.Fact). Every number an answer states is
@@ -87,13 +88,18 @@ export function DerivationDetail({
   );
 }
 
-/** The values an evidence record supplied to the answer. */
+/** The values an evidence record supplied to the answer. Each value keeps its
+ * number visible and hides the full seven-step lineage behind a disclosure, so
+ * the card still scans as receipts while any figure can be opened down to the
+ * filed row it came from. */
 export default function FactValues({
   evidenceId,
+  evidence,
   facts,
   derivations,
 }: {
   evidenceId: string;
+  evidence?: Evidence;
   facts: Record<string, Fact>;
   derivations: Record<string, Derivation>;
 }) {
@@ -103,19 +109,29 @@ export default function FactValues({
     <div className="fact-values">
       <span className="fact-values-label">Values in this answer</span>
       <ul>
-        {used.map((fact) => (
-          <li key={fact.fact_id}>
-            <div className="fact-row">
-              <span className="fact-name">{factLabel(fact.predicate)}</span>
-              <strong>{formatFactValue(fact)}</strong>
-            </div>
-            {derivations[fact.fact_id] ? (
-              <DerivationDetail derivation={derivations[fact.fact_id]} facts={facts} derivations={derivations} />
-            ) : (
-              <FactAddress fact={fact} />
-            )}
-          </li>
-        ))}
+        {used.map((fact) => {
+          const derivation = derivations[fact.fact_id];
+          return (
+            <li key={fact.fact_id}>
+              <div className="fact-row">
+                <span className="fact-name">{factLabel(fact.predicate)}</span>
+                <strong>{formatFactValue(fact)}</strong>
+              </div>
+              <details className="fact-lineage-toggle">
+                <summary>
+                  <span className="fact-lineage-hint">{derivation ? "Computed · view lineage" : "View lineage"}</span>
+                </summary>
+                <LineageChain
+                  fact={fact}
+                  derivation={derivation}
+                  evidence={evidence}
+                  facts={facts}
+                  derivations={derivations}
+                />
+              </details>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

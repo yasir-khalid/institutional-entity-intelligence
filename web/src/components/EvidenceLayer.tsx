@@ -219,7 +219,9 @@ function EvidenceCard({
         <span className="evidence-receipt-icon"><Database /></span>
         <div>
           <h3>{evidence.source}</h3>
-          <Badge variant={presentation.variant}>{presentation.label}</Badge>
+          <Badge variant={presentation.variant} className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+            {presentation.label}
+          </Badge>
         </div>
       </header>
 
@@ -245,7 +247,7 @@ function EvidenceCard({
         {evidence.source_timestamp && <Field label="Data as of"><span className="tabular">{evidence.source_timestamp}</span></Field>}
       </FieldGrid>
 
-      <FactValues evidenceId={evidence.evidence_id} facts={facts} derivations={derivations} />
+      <FactValues evidenceId={evidence.evidence_id} evidence={evidence} facts={facts} derivations={derivations} />
       <CoverageNote warnings={evidence.warnings} />
       {evidence.source_uri && (
         <a className="evidence-source-link" href={apiUrl(evidence.source_uri)} target="_blank" rel="noreferrer">
@@ -283,7 +285,7 @@ function CompactEvidenceCard({
         {presentation.label} · {evidence.result_count ?? "—"} record{evidence.result_count === 1 ? "" : "s"}
         {evidence.source_timestamp ? ` · as of ${evidence.source_timestamp}` : ""}
       </p>
-      <FactValues evidenceId={evidence.evidence_id} facts={facts} derivations={derivations} />
+      <FactValues evidenceId={evidence.evidence_id} evidence={evidence} facts={facts} derivations={derivations} />
       <CoverageNote warnings={evidence.warnings} />
       {evidence.source_uri && (
         <a className="evidence-source-link" href={apiUrl(evidence.source_uri)} target="_blank" rel="noreferrer">
