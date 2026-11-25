@@ -190,7 +190,7 @@ src/er/
 ├── agent/                  # entity Q&A: a standalone MCP server (search_entity,
 │                             get_entity_profile, get_relationship_hierarchy,
 │                             position history, 13D/G owners, ADV brochures)
-│                             plus an OpenRouter tool-calling orchestrator that
+│                             plus a tool-calling orchestrator that
 │                             is genuinely wired to it over the MCP protocol
 │                             (er.cli.mcp_server, er.cli.ask) - every tool
 │                             returns deterministic Evidence, not RAG chunks,

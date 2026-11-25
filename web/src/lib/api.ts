@@ -366,7 +366,6 @@ export async function workspaceMutation<T>(path: string, body?: unknown, method 
     const payload = await res.json().catch(() => ({}));
     throw new Error(typeof payload.detail === "string" ? payload.detail : `Request failed (${res.status}).`);
   }
-  window.dispatchEvent(new Event("workspace-updated"));
   return res.json() as Promise<T>;
 }
 
@@ -486,4 +485,181 @@ export async function askQuestionStream(
 
   if (!final) throw new Error("The agent stream ended without an answer.");
   return final;
+}
+
+/* Explore views: Form ADV advisers, Form D offerings and per-security 13F
+   ownership, short sale volume and fails-to-deliver (er.entity.advisers,
+   er.entity.offerings, er.entity.market). */
+
+export interface AdviserSummary {
+  crd_number: string;
+  business_name: string;
+  legal_name: string | null;
+  firm_type: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  raum: number | null;
+  accounts: number | null;
+  employees: number | null;
+  private_fund_count: number | null;
+  private_fund_gross_assets: number | null;
+  fund_types: string[];
+  lei: string | null;
+  snapshot_date: string;
+}
+
+export interface Adviser extends AdviserSummary {
+  sec_number: string | null;
+  cik: string | null;
+  street1: string | null;
+  street2: string | null;
+  postal_code: string | null;
+  phone: string | null;
+  website: string | null;
+  sec_status: string | null;
+  latest_filing_date: string | null;
+  legal_form: string | null;
+  advisory_employees: number | null;
+  raum_discretionary: number | null;
+  raum_non_discretionary: number | null;
+  raum_non_us: number | null;
+  hedge_fund_count: number | null;
+  pe_fund_count: number | null;
+  vc_fund_count: number | null;
+  real_estate_fund_count: number | null;
+  securitized_fund_count: number | null;
+  liquidity_fund_count: number | null;
+  other_fund_count: number | null;
+  thirteen_f_cik: string | null;
+  lei_name: string | null;
+  source_file: string;
+  history: {
+    snapshot_date: string;
+    raum: number | null;
+    raum_discretionary: number | null;
+    accounts: number | null;
+    employees: number | null;
+    private_fund_count: number | null;
+    private_fund_gross_assets: number | null;
+    source_file: string;
+  }[];
+  client_types: { client_type: string; client_count: number | null; fewer_than_five: boolean; raum: number | null }[];
+}
+
+export interface OfferingSummary {
+  accession_number: string;
+  filing_date: string | null;
+  submission_type: string | null;
+  is_amendment: boolean;
+  issuer_cik: string;
+  issuer_name: string;
+  city: string | null;
+  state: string | null;
+  industry_group: string | null;
+  fund_type: string | null;
+  is_fund: boolean;
+  total_offering: number | null;
+  offering_indefinite: boolean;
+  total_sold: number | null;
+  investor_count: number | null;
+  minimum_investment: number | null;
+}
+
+export interface Offering extends OfferingSummary {
+  file_number: string | null;
+  previous_accession_number: string | null;
+  street1: string | null;
+  state_description: string | null;
+  postal_code: string | null;
+  phone: string | null;
+  jurisdiction: string | null;
+  entity_type: string | null;
+  year_of_incorporation: string | null;
+  co_issuer_count: number;
+  is_40_act: boolean | null;
+  revenue_range: string | null;
+  nav_range: string | null;
+  exemptions: string[];
+  first_sale_date: string | null;
+  first_sale_yet_to_occur: boolean | null;
+  more_than_one_year: boolean | null;
+  total_remaining: number | null;
+  non_accredited_count: number | null;
+  sales_commission: number | null;
+  finders_fee: number | null;
+  source_file: string;
+  people: { name: string; city: string | null; state: string | null; relationships: string[]; clarification: string | null }[];
+  recipients: {
+    name: string;
+    crd_number: string | null;
+    broker_dealer_name: string | null;
+    broker_dealer_crd: string | null;
+    states: string[];
+    foreign_solicitation: boolean | null;
+  }[];
+}
+
+export interface OwnershipPeriod {
+  period_of_report: string;
+  period_date: string;
+  holder_count: number;
+  value_usd: number | null;
+  shares: number | null;
+}
+
+export interface OwnershipHolder {
+  cik: string;
+  filer_name: string | null;
+  lei: string | null;
+  value_usd: number | null;
+  shares: number | null;
+  previous_value_usd: number | null;
+  previous_shares: number | null;
+  change: number | null;
+  percent_change: number | null;
+  new: boolean;
+}
+
+export interface SecurityOwnership {
+  cusip: string;
+  issuer_name: string | null;
+  title_of_class: string | null;
+  tickers: string[];
+  latest_period: string;
+  previous_period: string | null;
+  holder_count: number;
+  periods: OwnershipPeriod[];
+  holders: OwnershipHolder[];
+}
+
+export interface SecurityView {
+  cusip: string | null;
+  symbol: string | null;
+  ownership: SecurityOwnership | null;
+  short_volume: {
+    trade_date: string;
+    short_volume: number;
+    short_exempt_volume: number | null;
+    total_volume: number;
+    short_ratio: number | null;
+  }[];
+  fails: {
+    cusip: string;
+    symbol: string | null;
+    description: string | null;
+    fails: { settlement_date: string; quantity: number; price: number | null }[];
+  } | null;
+}
+
+export type SecuritySummary = Pick<
+  SecurityOwnership,
+  "cusip" | "issuer_name" | "title_of_class" | "tickers" | "holder_count" | "latest_period"
+>;
+
+export interface ExploreResults {
+  query: string;
+  advisers: AdviserSummary[];
+  offerings: OfferingSummary[];
+  securities: SecuritySummary[];
 }

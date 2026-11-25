@@ -119,7 +119,7 @@ function Branch({
           </span>
 
           {(node.label || node.relationshipType) && (
-            <span className="text-ink-subtle hidden shrink-0 text-[11px] sm:inline">
+            <span className="text-ink-subtle hidden shrink-0 text-xs sm:inline">
               {node.label ?? node.relationshipType?.replaceAll("_", " ")}
             </span>
           )}
@@ -177,7 +177,7 @@ export default function EntityTreeView({
   return (
     <div className="scroll-thin h-full w-full overflow-auto p-2">
       {selectedEntityId && selectedEntityId !== tree.id && (
-        <p className="text-ink-subtle border-line-soft mb-1.5 rounded-md border px-2.5 py-1.5 text-[11px]">
+        <p className="text-ink-subtle border-line-soft mb-1.5 rounded-md border px-2.5 py-1.5 text-xs">
           Inspecting <span className="text-ink font-medium">{findNodeName(tree, selectedEntityId) ?? "related entity"}</span>
         </p>
       )}

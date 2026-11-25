@@ -3,7 +3,7 @@ double-entry check. Jev's verdict (er.agent.verifier) is the soft half. The
 cases where the two disagree are the useful ones, so both are reported.
 
 check_answer() and to_junit() are pure; run_cases() is the only function here
-that needs the MCP server, OpenRouter and the processed data.
+that needs the MCP server, the model providers and the processed data.
 """
 
 from __future__ import annotations

@@ -3,7 +3,11 @@ import AxeBuilder from "@axe-core/playwright";
 
 const LEI = "254900TESTENTITY00001";
 
-test("saved investigation reload, follow-up, rename and evidence", async ({
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("iei-onboarding-v1", "seen"));
+});
+
+test("saved investigation reload, follow-up and evidence", async ({
   page,
 }, testInfo) => {
   const errors: string[] = [];
@@ -41,22 +45,8 @@ test("saved investigation reload, follow-up, rename and evidence", async ({
   await expect(
     page.locator(".investigation-evidence .fact-row strong").filter({ hasText: /^US$/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Rename investigation" }).click();
-  await page
-    .getByLabel("Investigation title")
-    .fill(`Acme dossier ${testInfo.project.name}`);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(
-    page.getByRole("heading", {
-      name: `Acme dossier ${testInfo.project.name}`,
-    }),
-  ).toBeVisible();
   await page.reload();
-  await expect(
-    page.getByRole("heading", {
-      name: `Acme dossier ${testInfo.project.name}`,
-    }),
-  ).toBeVisible();
+  await expect(page.getByText("Research answer", { exact: true })).toHaveCount(2);
   const turns = page
     .getByRole("region", { name: "Research conversation" })
     .getByRole("article");
@@ -144,7 +134,7 @@ test("shareable entity tabs, immutable reviews, coverage and navigation", async 
     .getByRole("button", { name: "Search & navigate", exact: false })
     .click();
   await page
-    .getByPlaceholder("Search pages, investigations, or entities…")
+    .getByPlaceholder("Search pages or entities…")
     .fill("Entities");
   await page.getByRole("option", { name: "Entities", exact: true }).click();
   await expect(page).toHaveURL(/\/entities$/);

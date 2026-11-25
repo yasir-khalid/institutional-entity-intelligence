@@ -27,6 +27,7 @@ from pathlib import Path
 import duckdb
 
 from er.config import AppConfig
+from er.datasources.common.download import download_if_missing
 from er.datasources.common.parquet_writer import BatchedParquetWriter
 from er.datasources.sec_13f.models import Sec13FFiling, Sec13FHolding, Sec13FOtherManager, Sec13FValidation
 from er.datasources.sec_13f.schema import FILING_SCHEMA, HOLDING_SCHEMA, OTHER_MANAGER_SCHEMA, VALIDATION_SCHEMA
@@ -130,164 +131,156 @@ def validate_summary(
     )
 
 
-def parse_filings(cfg: AppConfig, zip_path: Path) -> int:
+def parse_filings(cfg: AppConfig, zip_paths: list[Path]) -> int:
     out_path = cfg.sec_13f.processed_dir / "sec_13f_filings.parquet"
     writer = BatchedParquetWriter(out_path, FILING_SCHEMA, cfg.sec_13f.batch_size)
-
     ingested_at = _ingested_at()
-    source_file = zip_path.name
-    snapshot_date = _snapshot_date(zip_path)
-
-    con = duckdb.connect()
-    extract_stack = tempfile.TemporaryDirectory()
-    with zipfile.ZipFile(zip_path) as zf:
-        submission = zf.extract("SUBMISSION.tsv", path=extract_stack.name)
-        coverpage = zf.extract("COVERPAGE.tsv", path=extract_stack.name)
-    query = f"""
-        SELECT
-            s.ACCESSION_NUMBER AS accession_number,
-            s.FILING_DATE AS filing_date,
-            s.SUBMISSIONTYPE AS submission_type,
-            s.CIK AS cik,
-            s.PERIODOFREPORT AS period_of_report,
-            c.ISAMENDMENT AS is_amendment,
-            c.AMENDMENTNO AS amendment_no,
-            c.AMENDMENTTYPE AS amendment_type,
-            c.FILINGMANAGER_NAME AS filer_name,
-            c.FILINGMANAGER_STREET1 AS filer_street1,
-            c.FILINGMANAGER_STREET2 AS filer_street2,
-            c.FILINGMANAGER_CITY AS filer_city,
-            c.FILINGMANAGER_STATEORCOUNTRY AS filer_state_or_country,
-            c.FILINGMANAGER_ZIPCODE AS filer_zipcode,
-            c.REPORTTYPE AS report_type,
-            c.FORM13FFILENUMBER AS form13f_file_number,
-            c.CRDNUMBER AS crd_number,
-            c.SECFILENUMBER AS sec_file_number,
-        FROM read_csv('{submission}', delim='\t', header=true, quote='', all_varchar=true) s
-        LEFT JOIN read_csv('{coverpage}', delim='\t', header=true, quote='', all_varchar=true) c
-            USING (ACCESSION_NUMBER)
-    """
     started = time.monotonic()
     count = 0
-    for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
-        for record in batch.to_pylist():
-            filer_name = record.get("filer_name") or ""
-            name_fields = build_name_fields(filer_name)
-            fields = {
-                **record,
-                "is_amendment": _row_bool(record.get("is_amendment")),
-                "filer_name": filer_name,
-                "filer_name_norm": name_fields["legal_name_norm"],
-                "filer_name_core": name_fields["legal_name_core"],
-                "source_file": source_file,
-                "snapshot_date": snapshot_date,
-                "ingested_at": ingested_at,
-            }
-            writer.add(Sec13FFiling(**fields).model_dump())
-            count += 1
-            if count % LOG_EVERY == 0:
-                elapsed = time.monotonic() - started
-                logger.info("filings: %d parsed (%.0fs)", count, elapsed)
+    for zip_path in zip_paths:
+        source_file = zip_path.name
+        snapshot_date = _snapshot_date(zip_path)
+        con = duckdb.connect()
+        with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(zip_path) as zf:
+            submission = zf.extract("SUBMISSION.tsv", path=tmp)
+            coverpage = zf.extract("COVERPAGE.tsv", path=tmp)
+            query = f"""
+                SELECT
+                    s.ACCESSION_NUMBER AS accession_number,
+                    s.FILING_DATE AS filing_date,
+                    s.SUBMISSIONTYPE AS submission_type,
+                    s.CIK AS cik,
+                    s.PERIODOFREPORT AS period_of_report,
+                    c.ISAMENDMENT AS is_amendment,
+                    c.AMENDMENTNO AS amendment_no,
+                    c.AMENDMENTTYPE AS amendment_type,
+                    c.FILINGMANAGER_NAME AS filer_name,
+                    c.FILINGMANAGER_STREET1 AS filer_street1,
+                    c.FILINGMANAGER_STREET2 AS filer_street2,
+                    c.FILINGMANAGER_CITY AS filer_city,
+                    c.FILINGMANAGER_STATEORCOUNTRY AS filer_state_or_country,
+                    c.FILINGMANAGER_ZIPCODE AS filer_zipcode,
+                    c.REPORTTYPE AS report_type,
+                    c.FORM13FFILENUMBER AS form13f_file_number,
+                    c.CRDNUMBER AS crd_number,
+                    c.SECFILENUMBER AS sec_file_number,
+                FROM read_csv('{submission}', delim='\t', header=true, quote='', all_varchar=true) s
+                LEFT JOIN read_csv('{coverpage}', delim='\t', header=true, quote='', all_varchar=true) c
+                    USING (ACCESSION_NUMBER)
+            """
+            for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
+                for record in batch.to_pylist():
+                    filer_name = record.get("filer_name") or ""
+                    name_fields = build_name_fields(filer_name)
+                    fields = {
+                        **record,
+                        "is_amendment": _row_bool(record.get("is_amendment")),
+                        "filer_name": filer_name,
+                        "filer_name_norm": name_fields["legal_name_norm"],
+                        "filer_name_core": name_fields["legal_name_core"],
+                        "source_file": source_file,
+                        "snapshot_date": snapshot_date,
+                        "ingested_at": ingested_at,
+                    }
+                    writer.add(Sec13FFiling(**fields).model_dump())
+                    count += 1
+                    if count % LOG_EVERY == 0:
+                        logger.info("filings: %d parsed (%.0fs)", count, time.monotonic() - started)
+        con.close()
 
     writer.close()
-    con.close()
-    extract_stack.cleanup()
     logger.info("filings: done, %d records -> %s", count, out_path)
     return count
 
 
-def parse_holdings(cfg: AppConfig, zip_path: Path) -> int:
+def parse_holdings(cfg: AppConfig, zip_paths: list[Path]) -> int:
     out_path = cfg.sec_13f.processed_dir / "sec_13f_holdings.parquet"
     writer = BatchedParquetWriter(out_path, HOLDING_SCHEMA, cfg.sec_13f.batch_size)
-
     ingested_at = _ingested_at()
-    source_file = zip_path.name
-    snapshot_date = _snapshot_date(zip_path)
-
-    con = duckdb.connect()
-    extract_stack = tempfile.TemporaryDirectory()
-    with zipfile.ZipFile(zip_path) as zf:
-        infotable = zf.extract("INFOTABLE.tsv", path=extract_stack.name)
-    query = f"""
-        SELECT
-            ACCESSION_NUMBER AS accession_number,
-            INFOTABLE_SK AS infotable_sk,
-            NAMEOFISSUER AS name_of_issuer,
-            TITLEOFCLASS AS title_of_class,
-            CUSIP AS cusip,
-            FIGI AS figi,
-            TRY_CAST(VALUE AS BIGINT) AS value,
-            TRY_CAST(SSHPRNAMT AS DOUBLE) AS shares_or_principal_amount,
-            SSHPRNAMTTYPE AS shares_or_principal_type,
-            PUTCALL AS put_call,
-            INVESTMENTDISCRETION AS investment_discretion,
-            OTHERMANAGER AS other_manager,
-            TRY_CAST(VOTING_AUTH_SOLE AS BIGINT) AS voting_auth_sole,
-            TRY_CAST(VOTING_AUTH_SHARED AS BIGINT) AS voting_auth_shared,
-            TRY_CAST(VOTING_AUTH_NONE AS BIGINT) AS voting_auth_none,
-        FROM read_csv('{infotable}', delim='\t', header=true, quote='', all_varchar=true)
-    """
     started = time.monotonic()
     count = 0
-    for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
-        for record in batch.to_pylist():
-            fields = {
-                **record,
-                "source_file": source_file,
-                "snapshot_date": snapshot_date,
-                "ingested_at": ingested_at,
-            }
-            writer.add(Sec13FHolding(**fields).model_dump())
-            count += 1
-            if count % LOG_EVERY == 0:
-                elapsed = time.monotonic() - started
-                logger.info("holdings: %d parsed (%.0fs, %.0f/s)", count, elapsed, count / elapsed)
+    for zip_path in zip_paths:
+        source_file = zip_path.name
+        snapshot_date = _snapshot_date(zip_path)
+        con = duckdb.connect()
+        with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(zip_path) as zf:
+            infotable = zf.extract("INFOTABLE.tsv", path=tmp)
+            query = f"""
+                SELECT
+                    ACCESSION_NUMBER AS accession_number,
+                    INFOTABLE_SK AS infotable_sk,
+                    NAMEOFISSUER AS name_of_issuer,
+                    TITLEOFCLASS AS title_of_class,
+                    CUSIP AS cusip,
+                    FIGI AS figi,
+                    TRY_CAST(VALUE AS BIGINT) AS value,
+                    TRY_CAST(SSHPRNAMT AS DOUBLE) AS shares_or_principal_amount,
+                    SSHPRNAMTTYPE AS shares_or_principal_type,
+                    PUTCALL AS put_call,
+                    INVESTMENTDISCRETION AS investment_discretion,
+                    OTHERMANAGER AS other_manager,
+                    TRY_CAST(VOTING_AUTH_SOLE AS BIGINT) AS voting_auth_sole,
+                    TRY_CAST(VOTING_AUTH_SHARED AS BIGINT) AS voting_auth_shared,
+                    TRY_CAST(VOTING_AUTH_NONE AS BIGINT) AS voting_auth_none,
+                FROM read_csv('{infotable}', delim='\t', header=true, quote='', all_varchar=true)
+            """
+            for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
+                for record in batch.to_pylist():
+                    fields = {
+                        **record,
+                        "source_file": source_file,
+                        "snapshot_date": snapshot_date,
+                        "ingested_at": ingested_at,
+                    }
+                    writer.add(Sec13FHolding(**fields).model_dump())
+                    count += 1
+                    if count % LOG_EVERY == 0:
+                        elapsed = time.monotonic() - started
+                        logger.info("holdings: %d parsed (%.0fs, %.0f/s)", count, elapsed, count / elapsed)
+        con.close()
 
     writer.close()
-    con.close()
-    extract_stack.cleanup()
     logger.info("holdings: done, %d records -> %s", count, out_path)
     return count
 
 
-def parse_validations(cfg: AppConfig, zip_path: Path) -> int:
+def parse_validations(cfg: AppConfig, zip_paths: list[Path]) -> int:
     out_path = cfg.sec_13f.processed_dir / "sec_13f_validations.parquet"
     writer = BatchedParquetWriter(out_path, VALIDATION_SCHEMA, cfg.sec_13f.batch_size)
     ingested_at = _ingested_at()
-    snapshot_date = _snapshot_date(zip_path)
-    provenance = {
-        "source_file": zip_path.name,
-        "snapshot_date": snapshot_date,
-        "ingested_at": ingested_at,
-    }
     holdings_path = cfg.sec_13f.processed_dir / "sec_13f_holdings.parquet"
-
-    with _extracted_member(zip_path, "SUMMARYPAGE.tsv") as summary_path:
-        con = duckdb.connect()
-        query = f"""
-            WITH observed AS (
-                SELECT accession_number, count(*) observed_entry_total,
-                       coalesce(sum(value), 0)::BIGINT observed_value_total
-                FROM read_parquet('{holdings_path}') GROUP BY accession_number
-            )
-            SELECT s.ACCESSION_NUMBER accession_number, f.filing_date,
-                   f.is_amendment, f.amendment_type,
-                   try_cast(s.TABLEENTRYTOTAL AS BIGINT) declared_entry_total,
-                   coalesce(o.observed_entry_total, 0)::BIGINT observed_entry_total,
-                   try_cast(s.TABLEVALUETOTAL AS BIGINT) declared_value_total,
-                   coalesce(o.observed_value_total, 0)::BIGINT observed_value_total
-            FROM read_csv('{summary_path}', delim='\t', header=true, quote='', all_varchar=true) s
-            LEFT JOIN read_parquet('{cfg.sec_13f.processed_dir / 'sec_13f_filings.parquet'}') f
-                USING (accession_number)
-            LEFT JOIN observed o USING (accession_number)
-        """
-        count = 0
-        for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
-            for row in batch.to_pylist():
-                writer.add(validate_summary(**row, provenance=provenance).model_dump())
-                count += 1
-        writer.close()
-        con.close()
+    count = 0
+    for zip_path in zip_paths:
+        provenance = {
+            "source_file": zip_path.name,
+            "snapshot_date": _snapshot_date(zip_path),
+            "ingested_at": ingested_at,
+        }
+        with _extracted_member(zip_path, "SUMMARYPAGE.tsv") as summary_path:
+            con = duckdb.connect()
+            query = f"""
+                WITH observed AS (
+                    SELECT accession_number, count(*) observed_entry_total,
+                           coalesce(sum(value), 0)::BIGINT observed_value_total
+                    FROM read_parquet('{holdings_path}') GROUP BY accession_number
+                )
+                SELECT s.ACCESSION_NUMBER accession_number, f.filing_date,
+                       f.is_amendment, f.amendment_type,
+                       try_cast(s.TABLEENTRYTOTAL AS BIGINT) declared_entry_total,
+                       coalesce(o.observed_entry_total, 0)::BIGINT observed_entry_total,
+                       try_cast(s.TABLEVALUETOTAL AS BIGINT) declared_value_total,
+                       coalesce(o.observed_value_total, 0)::BIGINT observed_value_total
+                FROM read_csv('{summary_path}', delim='\t', header=true, quote='', all_varchar=true) s
+                LEFT JOIN read_parquet('{cfg.sec_13f.processed_dir / 'sec_13f_filings.parquet'}') f
+                    USING (accession_number)
+                LEFT JOIN observed o USING (accession_number)
+            """
+            for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
+                for row in batch.to_pylist():
+                    writer.add(validate_summary(**row, provenance=provenance).model_dump())
+                    count += 1
+            con.close()
+    writer.close()
     quarantine_path = cfg.sec_13f.processed_dir / "sec_13f_quarantine.parquet"
     con = duckdb.connect()
     con.execute(f"""
@@ -298,29 +291,31 @@ def parse_validations(cfg: AppConfig, zip_path: Path) -> int:
     return count
 
 
-def parse_other_managers(cfg: AppConfig, zip_path: Path) -> int:
+def parse_other_managers(cfg: AppConfig, zip_paths: list[Path]) -> int:
     out_path = cfg.sec_13f.processed_dir / "sec_13f_other_managers.parquet"
     writer = BatchedParquetWriter(out_path, OTHER_MANAGER_SCHEMA, cfg.sec_13f.batch_size)
-    provenance = {
-        "source_file": zip_path.name,
-        "snapshot_date": _snapshot_date(zip_path),
-        "ingested_at": _ingested_at(),
-    }
-    with _extracted_member(zip_path, "OTHERMANAGER.tsv") as path:
-        con = duckdb.connect()
-        query = f"""
-            SELECT ACCESSION_NUMBER accession_number, cast(OTHERMANAGER_SK AS VARCHAR) other_manager_sk,
-                   CIK cik, FORM13FFILENUMBER form13f_file_number, CRDNUMBER crd_number,
-                   SECFILENUMBER sec_file_number, NAME AS "name"
-            FROM read_csv('{path}', delim='\t', header=true, quote='', all_varchar=true)
-        """
-        count = 0
-        for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
-            for row in batch.to_pylist():
-                writer.add(Sec13FOtherManager(**row, **provenance).model_dump())
-                count += 1
-        writer.close()
-        con.close()
+    ingested_at = _ingested_at()
+    count = 0
+    for zip_path in zip_paths:
+        provenance = {
+            "source_file": zip_path.name,
+            "snapshot_date": _snapshot_date(zip_path),
+            "ingested_at": ingested_at,
+        }
+        with _extracted_member(zip_path, "OTHERMANAGER.tsv") as path:
+            con = duckdb.connect()
+            query = f"""
+                SELECT ACCESSION_NUMBER accession_number, cast(OTHERMANAGER_SK AS VARCHAR) other_manager_sk,
+                       CIK cik, FORM13FFILENUMBER form13f_file_number, CRDNUMBER crd_number,
+                       SECFILENUMBER sec_file_number, NAME AS "name"
+                FROM read_csv('{path}', delim='\t', header=true, quote='', all_varchar=true)
+            """
+            for batch in con.sql(query).to_arrow_reader(cfg.sec_13f.batch_size):
+                for row in batch.to_pylist():
+                    writer.add(Sec13FOtherManager(**row, **provenance).model_dump())
+                    count += 1
+            con.close()
+    writer.close()
     return count
 
 
@@ -402,24 +397,25 @@ def check_value_scale(cfg: AppConfig) -> int:
     return flagged
 
 
-def _find_zip(cfg: AppConfig) -> Path:
-    raw_dir = cfg.sec_13f.raw_dir
-    matches = sorted(raw_dir.glob("*_form13f.zip"))
+def _find_zips(cfg: AppConfig) -> list[Path]:
+    for url in cfg.sec_13f.source_urls:
+        download_if_missing(url, cfg.sec_13f.raw_dir / url.rsplit("/", 1)[-1])
+    matches = sorted(cfg.sec_13f.raw_dir.glob("*_form13f.zip"))
     if not matches:
-        raise FileNotFoundError(f"no *_form13f.zip found under {raw_dir}")
-    return matches[-1]
+        raise FileNotFoundError(f"no *_form13f.zip found under {cfg.sec_13f.raw_dir}")
+    return matches
 
 
 def run_all(cfg: AppConfig) -> dict[str, int]:
-    """Finds the latest downloaded 13F bulk zip and parses both its tables. Pure
-    orchestration, no logging setup/CLI concerns - see er.cli.ingest_sec_13f for
-    the command-line entry point."""
-    zip_path = _find_zip(cfg)
-    logger.info("using %s", zip_path)
-    filings = parse_filings(cfg, zip_path)
-    holdings = parse_holdings(cfg, zip_path)
-    validations = parse_validations(cfg, zip_path)
-    other_managers = parse_other_managers(cfg, zip_path)
+    """Parses every downloaded 13F filing window into one set of tables, so a
+    position can be compared across report periods. Pure orchestration, no
+    logging setup/CLI concerns - see er.cli.ingest_sec_13f for the entry point."""
+    zip_paths = _find_zips(cfg)
+    logger.info("using %s", ", ".join(path.name for path in zip_paths))
+    filings = parse_filings(cfg, zip_paths)
+    holdings = parse_holdings(cfg, zip_paths)
+    validations = parse_validations(cfg, zip_paths)
+    other_managers = parse_other_managers(cfg, zip_paths)
     return {
         "filings": filings,
         "holdings": holdings,

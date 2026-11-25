@@ -5,11 +5,16 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BookOpen,
+  Briefcase,
   Building2,
+  ChartCandlestick,
+  ChevronRight,
   ClipboardCheck,
+  Compass,
   Database,
-  MessageSquare,
+  HandCoins,
   Search,
+  SquarePen,
   Waypoints,
 } from "lucide-react";
 import {
@@ -36,16 +41,33 @@ import {
   CommandItem,
   CommandEmpty,
 } from "@/components/ui/command";
-import { Button } from "@/components/ui/button";
-import { useResource } from "@/hooks/use-resource";
-import type { InvestigationSummary } from "@/lib/api";
+import { OnboardingTour } from "@/components/OnboardingTour";
 
 const navigation = [
-  { href: "/", label: "Research", icon: MessageSquare },
-  { href: "/entities", label: "Entities", icon: Building2 },
-  { href: "/reviews", label: "Match reviews", icon: ClipboardCheck },
-  { href: "/coverage", label: "Data coverage", icon: Database },
+  { href: "/", label: "Research", icon: SquarePen, group: "Workspace" },
+  { href: "/entities", label: "Entities", icon: Building2, group: "Workspace" },
+  { href: "/explore", label: "Explore", icon: Compass, group: "Workspace" },
+  { href: "/advisers", label: "Advisers", icon: Briefcase, group: "Markets" },
+  { href: "/raises", label: "Private raises", icon: HandCoins, group: "Markets" },
+  { href: "/securities", label: "Securities", icon: ChartCandlestick, group: "Markets" },
+  { href: "/reviews", label: "Match reviews", icon: ClipboardCheck, group: "Operations" },
+  { href: "/coverage", label: "Data coverage", icon: Database, group: "Operations" },
 ];
+
+const groups = ["Workspace", "Markets", "Operations"] as const;
+
+function currentLabel(pathname: string): string {
+  if (pathname.startsWith("/research/")) return "Research note";
+  if (pathname.startsWith("/entities/")) return "Entity profile";
+  if (pathname.startsWith("/advisers/")) return "Adviser profile";
+  if (pathname.startsWith("/raises/")) return "Private raise";
+  if (pathname.startsWith("/securities/")) return "Security";
+  return (
+    navigation.find(
+      (item) => item.href !== "/" && pathname.startsWith(item.href),
+    )?.label ?? (pathname === "/" ? "Research" : "Workspace")
+  );
+}
 
 function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -53,25 +75,34 @@ function Shell({ children }: { children: ReactNode }) {
   const { setOpenMobile } = useSidebar();
   const [commandOpen, setCommandOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const saved = useResource<{ items: InvestigationSummary[] }>(
-    "/api/investigations?limit=20",
-  );
-  const { refresh } = saved;
   useEffect(() => {
-    const update = () => refresh();
     const key = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "k") {
         event.preventDefault();
         setCommandOpen((value) => !value);
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      if (
+        !typing &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "n"
+      ) {
+        event.preventDefault();
+        router.push("/");
       }
     };
-    window.addEventListener("workspace-updated", update);
     window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("workspace-updated", update);
-      window.removeEventListener("keydown", key);
-    };
-  }, [refresh]);
+    return () => window.removeEventListener("keydown", key);
+  }, [router]);
   function go(href: string) {
     setCommandOpen(false);
     setOpenMobile(false);
@@ -90,74 +121,57 @@ function Shell({ children }: { children: ReactNode }) {
                 asChild
                 size="lg"
                 tooltip="Institutional Entity Intelligence"
+                className="gap-2.5"
               >
                 <Link href="/" onClick={() => setOpenMobile(false)}>
-                  <span className="query-logo">
-                    <Waypoints />
-                  </span>
+                  <span className="sidebar-brand-mark"><Waypoints aria-hidden /></span>
                   <span className="workspace-brand">
                     Institutional
-                    <br />
                     <small>Entity Intelligence</small>
                   </span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
+          <Link
+            href="/"
+            className="sidebar-new-chat group-data-[collapsible=icon]:hidden"
+            onClick={() => setOpenMobile(false)}
+          >
+            <SquarePen aria-hidden />
+            New chat
+            <kbd>N</kbd>
+          </Link>
         </SidebarHeader>
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-            <SidebarMenu>
-              {navigation.map(({ href, label, icon: Icon }) => (
-                <SidebarMenuItem key={href}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={
-                      href === "/"
-                        ? pathname === "/" || pathname.startsWith("/research/")
-                        : pathname.startsWith(href)
-                    }
-                    tooltip={label}
-                  >
-                    <Link href={href} onClick={() => setOpenMobile(false)}>
-                      <Icon />
-                      <span>{label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroup>
-          <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-            <SidebarGroupLabel>Saved investigations</SidebarGroupLabel>
-            <SidebarMenu>
-              {saved.data?.items.map((item) => (
-                <SidebarMenuItem key={item.id}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === `/research/${item.id}`}
-                  >
-                    <Link
-                      href={`/research/${item.id}`}
-                      onClick={() => setOpenMobile(false)}
-                      title={item.title}
-                    >
-                      <MessageSquare />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-              {!saved.data?.items.length && (
-                <li className="px-2 text-xs text-muted-foreground">
-                  {saved.error
-                    ? "Saved research unavailable."
-                    : "Your research will appear here."}
-                </li>
-              )}
-            </SidebarMenu>
-          </SidebarGroup>
+        <SidebarContent role="navigation" aria-label="Workspace">
+          {groups.map((group) => (
+            <SidebarGroup key={group}>
+              <SidebarGroupLabel>{group}</SidebarGroupLabel>
+              <SidebarMenu>
+                {navigation
+                  .filter((item) => item.group === group)
+                  .map(({ href, label, icon: Icon }) => (
+                    <SidebarMenuItem key={href}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={
+                          href === "/"
+                            ? pathname === "/" ||
+                              pathname.startsWith("/research/")
+                            : pathname.startsWith(href)
+                        }
+                        tooltip={label}
+                      >
+                        <Link href={href} onClick={() => setOpenMobile(false)}>
+                          <Icon />
+                          <span>{label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+              </SidebarMenu>
+            </SidebarGroup>
+          ))}
         </SidebarContent>
         <SidebarFooter>
           <SidebarMenu>
@@ -176,18 +190,23 @@ function Shell({ children }: { children: ReactNode }) {
       <SidebarInset className="min-w-0">
         <header className="workspace-topbar">
           <SidebarTrigger />
-          <span>
-            {navigation.find(
-              (item) => item.href !== "/" && pathname.startsWith(item.href),
-            )?.label ?? "Research workspace"}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
+          <div className="topbar-breadcrumb">
+            <Link href="/" className="topbar-crumb-link">
+              Workspace
+            </Link>
+            <ChevronRight aria-hidden />
+            <strong>{currentLabel(pathname)}</strong>
+          </div>
+          <button
+            type="button"
+            className="topbar-command"
+            aria-label="Search & navigate"
             onClick={() => setCommandOpen(true)}
           >
-            <Search /> Search & navigate <kbd>⌘ K</kbd>
-          </Button>
+            <Search aria-hidden />
+            <span>Search entities and filings…</span>
+            <kbd>⌘ K</kbd>
+          </button>
         </header>
         <div id="workspace-main" tabIndex={-1} className="workspace-main">
           {children}
@@ -197,10 +216,10 @@ function Shell({ children }: { children: ReactNode }) {
         open={commandOpen}
         onOpenChange={setCommandOpen}
         title="Search and navigate"
-        description="Find a page, saved investigation, or search institutional entities."
+        description="Find a page or search institutional entities."
       >
         <CommandInput
-          placeholder="Search pages, investigations, or entities…"
+          placeholder="Search pages or entities…"
           value={query}
           onValueChange={setQuery}
         />
@@ -225,22 +244,20 @@ function Shell({ children }: { children: ReactNode }) {
                 <Search />
                 Search entities for “{query.trim()}”
               </CommandItem>
+              <CommandItem
+                value={`explore ${query}`}
+                onSelect={() =>
+                  go(`/explore?q=${encodeURIComponent(query.trim())}`)
+                }
+              >
+                <Compass />
+                Search advisers, raises and securities for “{query.trim()}”
+              </CommandItem>
             </CommandGroup>
           )}
-          <CommandGroup heading="Saved investigations">
-            {saved.data?.items.map((item) => (
-              <CommandItem
-                key={item.id}
-                value={item.title + item.id}
-                onSelect={() => go(`/research/${item.id}`)}
-              >
-                <MessageSquare />
-                {item.title}
-              </CommandItem>
-            ))}
-          </CommandGroup>
         </CommandList>
       </CommandDialog>
+      <OnboardingTour />
     </>
   );
 }

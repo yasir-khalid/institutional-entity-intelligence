@@ -1,16 +1,19 @@
-import { Suspense } from "react";
 import EntityPage from "@/components/EntityPage";
-import { Loading } from "@/components/WorkspaceStates";
+import { firstValues, type PageSearchParams } from "@/lib/search-params";
 
 export default async function EntityRoute({
   params,
+  searchParams,
 }: {
   params: Promise<{ entityId: string }>;
+  searchParams: PageSearchParams;
 }) {
   const { entityId } = await params;
   return (
-    <Suspense fallback={<Loading />}>
-      <EntityPage key={entityId} id={entityId} />
-    </Suspense>
+    <EntityPage
+      key={entityId}
+      id={entityId}
+      searchParams={firstValues(await searchParams)}
+    />
   );
 }

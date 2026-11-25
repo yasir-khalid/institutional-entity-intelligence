@@ -1,17 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { DecisionCard } from "@/components/EntityProfile";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { LoadError, Loading, NoData } from "@/components/WorkspaceStates";
+import { PageHeader } from "@/components/PageHeader";
 import { useResource } from "@/hooks/use-resource";
 import type { MatchDecision } from "@/lib/api";
 
-export default function ReviewQueue() {
-  const params = useSearchParams();
+export default function ReviewQueue({
+  searchParams,
+}: {
+  searchParams: Record<string, string>;
+}) {
   const router = useRouter();
+  const params = new URLSearchParams(searchParams);
   const decision = ["REVIEW", "AUTO_MATCH", "UNMATCHED"].includes(
     params.get("decision") || "",
   )
@@ -25,14 +30,11 @@ export default function ReviewQueue() {
   const url = (next: number) => `/reviews?decision=${decision}&offset=${next}`;
   return (
     <div className="workspace-page">
-      <div className="workspace-heading compact">
-        <p>Resolution evidence</p>
-        <h1>Match reviews</h1>
-        <span>
-          Machine decisions stay immutable. Your dated review is separate
-          evidence used by the next graph build.
-        </span>
-      </div>
+      <PageHeader
+        eyebrow="Resolution evidence"
+        title="Match reviews"
+        description="Machine decisions stay immutable. Your dated review is separate evidence, used by the next graph build."
+      />
       <Tabs
         value={decision}
         onValueChange={(value) => router.push(`/reviews?decision=${value}`)}

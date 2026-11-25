@@ -11,6 +11,12 @@ sec_13f:
   raw_dir: data/raw/sec_13f
   processed_dir: data/processed
   batch_size: 50000
+  # Four filing windows = four report periods, so holder changes can be computed.
+  source_urls:
+    - https://www.sec.gov/files/datastandardsinnovation/data/form-13f-data-sets/01jun2026-31aug2026_form13f.zip
+    - https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01mar2026-31may2026_form13f.zip
+    - https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01dec2025-28feb2026_form13f.zip
+    - https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01sep2025-30nov2025_form13f.zip
 
 sec_submissions:
   raw_dir: data/raw/sec_submissions
@@ -38,6 +44,9 @@ sec_insiders:
   processed_dir: data/processed
   source_url: https://www.sec.gov/files/datastandardsinnovation/data/insider-transactions-data-sets/2026q2_form345.zip
   source_file: 2026q2_form345.zip
+  history_urls:
+    - https://www.sec.gov/files/datastandardsinnovation/data/insider-transactions-data-sets/2026q3_form345.zip
+    - https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/2026q1_form345.zip
 
 sec_adv:
   raw_dir: data/raw/sec_adv
@@ -67,16 +76,94 @@ sec_xbrl:
   max_issuers: 40
   requests_per_second: 8
 
+sec_adv_firms:
+  raw_dir: data/raw/sec_adv_firms
+  processed_dir: data/processed
+  # Monthly Part 1A extracts (registered; the latest exempt-reporting file too).
+  # Each kept file is one point on an adviser's AUM history.
+  source_urls:
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia100226.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia100226-exempt.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia09012026-registered.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia08032026_1.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia07012026.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia060126_0.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia050126.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia040126.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia030226.zip
+    - https://www.sec.gov/files/investment/data/other/information-about-registered-investment-advisers-exempt-reporting-advisers/ia020226.zip
+    - https://www.sec.gov/files/investment/data/information-about-registered-investment-advisers-exempt-reporting-advisers/ia010226.zip
+    - https://www.sec.gov/files/investment/data/information-about-registered-investment-advisers-exempt-reporting-advisers/ia122025.zip
+    - https://www.sec.gov/files/investment/data/information-about-registered-investment-advisers-and-exempt-reporting-advisers/ia120121.zip
+
+sec_form_d:
+  raw_dir: data/raw/sec_form_d
+  processed_dir: data/processed
+  source_urls:
+    - https://www.sec.gov/files/datastandardsinnovation/data/form-d-data-sets/2026q3_d.zip
+    - https://www.sec.gov/files/datastandardsinnovation/data/form-d-data-sets/2026q2_d.zip
+    - https://www.sec.gov/files/structureddata/data/form-d-data-sets/2026q1_d.zip
+    - https://www.sec.gov/files/structureddata/data/form-d-data-sets/2025q4_d.zip
+    - https://www.sec.gov/files/structureddata/data/form-d-data-sets/2025q3_d.zip
+    - https://www.sec.gov/files/structureddata/data/form-d-data-sets/2025q2_d.zip
+    - https://www.sec.gov/files/structureddata/data/form-d-data-sets/2025q1_d.zip
+
+finra_short_volume:
+  raw_dir: data/raw/finra_short_volume
+  processed_dir: data/processed
+  lookback_days: 45
+
+sec_ftd:
+  raw_dir: data/raw/sec_ftd
+  processed_dir: data/processed
+  source_urls:
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202609b.zip
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202609a.zip
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202608b.zip
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202608a.zip
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202607b.zip
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202607a.zip
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202606b.zip
+    - https://www.sec.gov/files/data/fails-deliver-data/cnsfails202606a.zip
+    - https://www.sec.gov/files/data/other/fails-deliver-data/cnsfails202605b.zip
+    - https://www.sec.gov/files/data/other/fails-deliver-data/cnsfails202605a.zip
+
 entity:
   processed_dir: data/processed
 
 opensearch:
   index_name: gleif_entities_v1
-  number_of_shards: 2
+  # One shard holds the ~1 GB match index comfortably and suits a free-tier
+  # cluster capped at 20 shards. Takes effect on `make index --recreate`.
+  number_of_shards: 1
   number_of_replicas: 0
   bulk_batch_size: 2000
   refresh_interval_during_bulk: "-1"
   refresh_interval_after_bulk: "1s"
+
+# The hosted demo cluster allows 20 shards in total (5 are Aiven's own). With
+# the small read indexes packed together and superseded generations pruned,
+# serving takes 4 shards live and 8 while a publish is staged.
+serving:
+  keep_previous_generation: false
+  packed:
+    - gleif_relationships
+    - 13f_filers
+    - match_decisions
+    - nport_funds
+    - fund_series
+    - securities
+    - 13dg_ownership
+    - sec_adv_documents
+    - sec_adv_pages
+    - sec_adv_pdfs
+    - xbrl_facts
+    - xbrl_issuers
+    - adv_firms
+    - form_d_offerings
+    - security_ownership
+    - short_volume
+    - fails_to_deliver
 
 search:
   default_size: 20
@@ -96,18 +183,24 @@ benchmark:
   min_core_tokens: 3
   max_confusable_group_size: 10
 
-# Entity Q&A agent (er.agent) - the API key itself lives only in .env
-# (OPENROUTER_API_KEY), never here.
+# Entity Q&A agent (er.agent) - API keys live only in .env, never here.
+# The chat model's provider is the first four settings. For OpenCode Go instead:
+#   model: deepseek-v4.1-flash
+#   base_url: https://opencode.ai/inference/go/openai/v1
+#   api_key_env: OPENCODE_API_KEY
+#   session_header: x-opencode-session
 agent:
-  openrouter_model: deepseek/deepseek-v4.1-flash
-  openrouter_base_url: https://openrouter.ai/api/v1
-  mcp_server_command: ["uv", "run", "python", "-m", "er.cli.mcp_server"]
-  max_tool_turns: 6
+  model: deepseek/deepseek-v4.1-flash
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  session_header: x-session-id
+  mcp_server_command: ["python", "-m", "er.cli.mcp_server"]
+  max_tool_turns: 8
   # Retry a model call that failed transiently (dropped connection, 429/502/
   # 503/504) - never a 400, which fails identically every time.
-  openrouter_retries: 2
-  openrouter_retry_backoff_seconds: 0.75
-  openrouter_connect_timeout_seconds: 10
+  retries: 2
+  retry_backoff_seconds: 0.75
+  connect_timeout_seconds: 10
   # Per tool result, as sent to the model. A large issuer's full profile can be
   # ~7.6M chars (30k+ ISIN identifiers inlined), which the API rejects; over this,
   # long lists are trimmed with elisions marked and the model is told.

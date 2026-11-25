@@ -3,8 +3,12 @@
 `er.agent.mcp_server` is a standalone MCP server (`search_entity`,
 `get_entity_profile`, `get_relationship_hierarchy`, `search_adv_documents`,
 `get_position_history`, `get_beneficial_owners`, `get_entity_connections`,
-`get_fund_structure`, `get_security`).
-`er.agent.orchestrator` drives an OpenRouter model through it over stdio, the
+`get_fund_structure`, `get_security`, `get_issuer_financials`,
+`get_adviser_profile`, `search_private_offerings`, `get_security_ownership`,
+`get_short_activity`, `lookup_private_entity`, `get_private_entity`,
+`get_security_holders`, `search_filings`).
+`er.agent.orchestrator` drives `deepseek/deepseek-v4.1-flash` on OpenRouter (the provider is set in
+`config/dev.yaml` under `agent`) through it over stdio, the
 same way any other MCP client would, until the model calls `submit_answer`.
 
 ```bash
@@ -33,7 +37,7 @@ same `contextId` and the last four answered turns go along as history.
 `http://localhost:8000`) - set it to the deployed URL. With `A2A_API_KEY` set,
 `/a2a` requires `Authorization: Bearer <key>` and the card says so; without it
 `/a2a` is open, which is only fine on localhost since every call spends
-OpenRouter credit. Tasks live in memory: a restart forgets conversations, and
+model credit. Tasks live in memory: a restart forgets conversations, and
 running more than one API replica needs a shared task store first.
 
 ```bash
@@ -55,6 +59,19 @@ submission goes back to the model with the reason. Computed values (a
 position's change between 13F reports) come from registered formulas in
 `er.knowledge.formulas` and carry their input facts, so the evidence card can
 show the formula. Form ADV citations open the original PDF page.
+
+## Generative UI
+
+An answer may end with one ```` ```openui-lang ```` block ([OpenUI
+Lang](https://www.openui.com)): a chart, table or headline figures the
+workspace renders in place. The component list and prompt come from
+`web/src/lib/openui/spec.json` (`npm run openui:prompt` writes
+`config/openui/system-prompt.md`, which `er.agent.genui` appends to the system
+prompt; `agent.generative_ui: false` turns it off). The block is part of the
+answer text, so the gate treats it like prose: no number may be typed in it.
+A placeholder inside a string renders formatted (`"{{f:id}}"` -> `"$1,500"`),
+a bare one renders the raw value for a chart (`{{f:id}}` -> `1500`). The only
+action a block can take is asking a follow-up question.
 
 ## Answer verification
 
@@ -87,7 +104,7 @@ evaluator. They are sibling steps, not turns: one question is one turn. Each
 span kind has its own icon and tint. Select a span and its latency, tokens,
 cost and input/output open beside the tree, payloads as a collapsible
 key/value tree: for an LLM call, the tool calls it requested, forced tool
-choice, finish reason, provider and OpenRouter generation id; for a tool
+choice, finish reason, provider and generation id; for a tool
 call, its arguments, result and evidence, plus which LLM call requested it;
 for the guardrail, a rejection and why; for the evaluator, each check's
 reading against its threshold. The root shows the whole run as a timeline.
@@ -101,6 +118,6 @@ always asks for one so the panel can be opened *after* an answer looks wrong.
 
 Separately, each tool result is capped at `agent.max_tool_result_chars`
 (40k) *as sent to the model* - the full profile of a large issuer inlines
-tens of thousands of ISINs (~7.6M chars), which OpenRouter rejects outright.
+tens of thousands of ISINs (~7.6M chars), which the provider rejects outright.
 Over the cap, lists are trimmed with each elision marked and the model is told
 to take counts from the evidence records; the trace shows when this happened.

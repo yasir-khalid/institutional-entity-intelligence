@@ -1,19 +1,23 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { cookies } from "next/headers";
 import WorkspaceShell from "@/components/WorkspaceShell";
 
-/* Inter Variable, the typeface Linear is built on. There is deliberately no
- * monospace face anywhere in the UI: identifiers, payloads and timings use
- * Inter's tabular figures so a column of LEIs or durations still aligns. The
- * single-story "a" (cv01) and the curved-tail "l" (ss03) alternates are the
- * two stylistic sets that give Linear its voice; both are enabled on `body`
- * in globals.css. A variable font, so no weight list is needed. */
+/* Matter is Warp's licensed geometric face; Inter is the guide's declared free
+ * substitute. Headlines and UI share one family, with weight, size and very
+ * tight display tracking doing the hierarchy. Geist Mono is reserved for
+ * identifiers, payloads and terminal micro-copy. */
 const sans = Inter({
   subsets: ["latin"],
   display: "swap",
-  variable: "--font-sans",
+  variable: "--font-body",
+});
+
+const mono = Geist_Mono({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-code",
 });
 
 export const metadata: Metadata = {
@@ -24,7 +28,10 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const defaultOpen = (await cookies()).get("sidebar_state")?.value !== "false";
   return (
-    <html lang="en" className={`${sans.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      className={`${sans.variable} ${mono.variable} h-full antialiased`}
+    >
       <body className="h-full font-sans">
         <WorkspaceShell defaultOpen={defaultOpen}>{children}</WorkspaceShell>
       </body>

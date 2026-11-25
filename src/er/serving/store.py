@@ -32,8 +32,14 @@ RELATIONSHIPS = "gleif_relationships"
 OWNERSHIP = "13dg_ownership"
 ADV_DOCUMENTS = "sec_adv_documents"
 ADV_PAGES = "sec_adv_pages"
+ADV_PDFS = "sec_adv_pdfs"
 XBRL_FACTS = "xbrl_facts"
 XBRL_ISSUERS = "xbrl_issuers"
+ADV_FIRMS = "adv_firms"
+FORM_D = "form_d_offerings"
+SECURITY_OWNERSHIP = "security_ownership"
+SHORT_VOLUME = "short_volume"
+FAILS_TO_DELIVER = "fails_to_deliver"
 REVIEWS = "match_reviews"
 COVERAGE = "coverage"
 DECISIONS = "match_decisions"
@@ -91,12 +97,29 @@ def _terms(field: str, value: Any) -> dict:
 
 
 class OpenSearchStore:
-    def __init__(self, client: OpenSearch, prefix: str):
+    """`packed` names serving indexes published into one physical index
+    (er.serving.publish): their ids carry a "<name>:" prefix and every query
+    is filtered by serving_kind, so callers see the same contract either way."""
+
+    def __init__(self, client: OpenSearch, prefix: str, packed: frozenset[str] = frozenset()):
         self.client = client
         self.prefix = prefix
+        self.packed = packed
 
     def alias(self, index: str) -> str:
-        return f"{self.prefix}_{index}"
+        return f"{self.prefix}_{'packed' if index in self.packed else index}"
+
+    def _id(self, index: str, doc_id: str) -> str:
+        return f"{index}:{doc_id}" if index in self.packed else doc_id
+
+    def _kind(self, index: str) -> list[dict]:
+        return [{"term": {"serving_kind": index}}] if index in self.packed else []
+
+    @staticmethod
+    def _source(hit: dict) -> dict:
+        source = hit["_source"]
+        source.pop("serving_kind", None)
+        return source
 
     def _missing(self, index: str, exc: NotFoundError) -> MissingIndexError | None:
         if getattr(exc, "error", "") == "index_not_found_exception":
@@ -105,9 +128,9 @@ class OpenSearchStore:
 
     def get(self, index: str, doc_id: str, fields: tuple[str, ...] = ()) -> dict | None:
         try:
-            return self.client.get(
-                index=self.alias(index), id=doc_id, _source_includes=list(fields) if fields else None
-            )["_source"]
+            return self._source(self.client.get(
+                index=self.alias(index), id=self._id(index, doc_id), _source_includes=list(fields) if fields else None
+            ))
         except NotFoundError as exc:
             if index == INVESTIGATIONS:
                 return None
@@ -121,17 +144,20 @@ class OpenSearchStore:
         try:
             response = self.client.mget(
                 index=self.alias(index),
-                body={"ids": list(dict.fromkeys(ids))},
+                body={"ids": [self._id(index, doc_id) for doc_id in dict.fromkeys(ids)]},
                 _source_includes=list(fields) if fields else None,
             )
         except NotFoundError as exc:
             raise self._missing(index, exc) or exc from exc
-        return {doc["_id"]: doc["_source"] for doc in response["docs"] if doc.get("found")}
+        prefix = len(self._id(index, ""))
+        return {doc["_id"][prefix:]: self._source(doc) for doc in response["docs"] if doc.get("found")}
 
     def find(
         self, index, *, where=None, either=None, missing=(), sort=(), size=100, collapse=None, fields=()
     ) -> list[dict]:
-        query: dict[str, Any] = {"filter": [_terms(field, value) for field, value in (where or {}).items()]}
+        query: dict[str, Any] = {
+            "filter": [_terms(field, value) for field, value in (where or {}).items()] + self._kind(index)
+        }
         if either:
             query["should"] = [_terms(field, value) for field, value in either.items()]
             query["minimum_should_match"] = 1
@@ -150,14 +176,14 @@ class OpenSearchStore:
             if index in (REVIEWS, INVESTIGATIONS, COVERAGE, DECISIONS):
                 return []
             raise self._missing(index, exc) or exc from exc
-        return [hit["_source"] for hit in response["hits"]["hits"]]
+        return [self._source(hit) for hit in response["hits"]["hits"]]
 
     def search_text(self, index, query, *, field, where=None, sort=(), size=100, fields=()) -> list[dict]:
         body: dict[str, Any] = {
             "query": {
                 "bool": {
                     "must": [{"match_phrase": {field: query}}],
-                    "filter": [_terms(name, value) for name, value in (where or {}).items()],
+                    "filter": [_terms(name, value) for name, value in (where or {}).items()] + self._kind(index),
                 }
             },
             "size": size,
@@ -170,7 +196,7 @@ class OpenSearchStore:
             response = self.client.search(index=self.alias(index), body=body)
         except NotFoundError as exc:
             raise self._missing(index, exc) or exc from exc
-        return [hit["_source"] for hit in response["hits"]["hits"]]
+        return [self._source(hit) for hit in response["hits"]["hits"]]
 
     def put(self, index: str, doc_id: str, doc: dict) -> None:
         # Reviews and investigations are authored at runtime and created on first
@@ -224,14 +250,23 @@ class OpenSearchStore:
 
     def scan(self, index: str) -> Iterator[dict]:
         try:
-            for hit in helpers.scan(self.client, index=self.alias(index), query={"query": {"match_all": {}}}):
-                yield hit["_source"]
+            query = {"bool": {"filter": self._kind(index)}} if index in self.packed else {"match_all": {}}
+            for hit in helpers.scan(self.client, index=self.alias(index), query={"query": query}):
+                yield self._source(hit)
         except NotFoundError:
             return
 
 
 def _only(doc: dict, fields: tuple[str, ...]) -> dict:
     return {field: doc[field] for field in fields if field in doc} if fields else doc
+
+
+def _matches(doc: dict, field: str, value: Any) -> bool:
+    # A term query on an array field matches any element, as in OpenSearch.
+    present = doc.get(field)
+    candidates = present if isinstance(present, list) else [present]
+    wanted = value if isinstance(value, list) else [value]
+    return any(candidate in wanted for candidate in candidates)
 
 
 class MemoryStore:
@@ -257,18 +292,11 @@ class MemoryStore:
     def find(
         self, index, *, where=None, either=None, missing=(), sort=(), size=100, collapse=None, fields=()
     ) -> list[dict]:
-        def matches(doc: dict, field: str, value: Any) -> bool:
-            # A term query on an array field matches any element, as in OpenSearch.
-            present = doc.get(field)
-            candidates = present if isinstance(present, list) else [present]
-            wanted = value if isinstance(value, list) else [value]
-            return any(candidate in wanted for candidate in candidates)
-
         hits = [
             doc
             for doc in self._documents(index)
-            if all(matches(doc, field, value) for field, value in (where or {}).items())
-            and (not either or any(matches(doc, field, value) for field, value in either.items()))
+            if all(_matches(doc, field, value) for field, value in (where or {}).items())
+            and (not either or any(_matches(doc, field, value) for field, value in either.items()))
             and all(doc.get(field) is None for field in missing)
         ]
         # Sorted key by key, last first; documents without the field go last
@@ -293,7 +321,7 @@ class MemoryStore:
             doc
             for doc in self._documents(index)
             if needle in str(doc.get(field) or "").casefold()
-            and all(doc.get(name) == value for name, value in (where or {}).items())
+            and all(_matches(doc, name, value) for name, value in (where or {}).items())
         ]
         for name, order in reversed(sort):
             present = sorted(
@@ -323,11 +351,11 @@ class MemoryStore:
 
 
 @lru_cache
-def _cached_store(url: str, prefix: str) -> OpenSearchStore:
+def _cached_store(url: str, prefix: str, packed: frozenset[str]) -> OpenSearchStore:
     from er.indexing.opensearch_index import get_client_for
 
-    return OpenSearchStore(get_client_for(url), prefix)
+    return OpenSearchStore(get_client_for(url), prefix, packed)
 
 
 def get_store(cfg: AppConfig) -> OpenSearchStore:
-    return _cached_store(cfg.opensearch_url, cfg.serving.prefix)
+    return _cached_store(cfg.opensearch_url, cfg.serving.prefix, frozenset(cfg.serving.packed))

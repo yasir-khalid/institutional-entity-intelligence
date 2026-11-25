@@ -35,6 +35,8 @@ class Sec13FScaleCheck(BaseModel):
 class Sec13FConfig(BaseModel):
     raw_dir: Path
     processed_dir: Path
+    # Every *_form13f.zip in raw_dir is ingested; these are fetched if missing.
+    source_urls: list[str] = []
     batch_size: int = 50_000
     scale_check: Sec13FScaleCheck = Sec13FScaleCheck()
 
@@ -81,6 +83,8 @@ class SecInsidersConfig(BaseModel):
         "insider-transactions-data-sets/2026q2_form345.zip"
     )
     source_file: str = "2026q2_form345.zip"
+    # Earlier quarters for transaction history; every *_form345.zip in raw_dir is parsed.
+    history_urls: list[str] = []
     batch_size: int = 50_000
 
 
@@ -155,12 +159,50 @@ class SecXbrlConfig(BaseModel):
     batch_size: int = 25_000
 
 
+class SecAdvFirmsConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_adv_firms")
+    processed_dir: Path = Path("data/processed")
+    # Every monthly file kept is one point on an adviser's AUM history.
+    source_urls: list[str] = []
+    batch_size: int = 25_000
+
+
+class SecFormDConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_form_d")
+    processed_dir: Path = Path("data/processed")
+    source_urls: list[str] = []
+    batch_size: int = 25_000
+
+
+class FinraShortVolumeConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/finra_short_volume")
+    processed_dir: Path = Path("data/processed")
+    base_url: str = "https://cdn.finra.org/equity/regsho/daily/"
+    lookback_days: int = 45
+    batch_size: int = 50_000
+
+
+class SecFtdConfig(BaseModel):
+    raw_dir: Path = Path("data/raw/sec_ftd")
+    processed_dir: Path = Path("data/processed")
+    source_urls: list[str] = []
+    batch_size: int = 50_000
+
+
 class ServingConfig(BaseModel):
     # Every serving index is reached through an alias "<prefix>_<name>" (see
     # er.serving.store); `make publish` builds a dated index and swaps the alias.
     prefix: str = "er"
     bulk_batch_size: int = 2000
     connections_per_group: int = 25
+    holders_per_security: int = 100
+    # Serving indexes stored together in one physical index ("<prefix>_packed"),
+    # told apart by a serving_kind field. Fewer shards for a small cluster; the
+    # Store contract and every reader are unchanged.
+    packed: list[str] = []
+    # Keep the superseded generation after a publish (what --rollback restores).
+    # Off on a shard-limited cluster, where it would double the shard count.
+    keep_previous_generation: bool = True
 
 
 class WorkspaceConfig(BaseModel):
@@ -257,9 +299,9 @@ class VerifierConfig(BaseModel):
     """Post-answer verification with TypeSafe's Jev - see er.agent.verifier.
 
     `decisions_url` is a full URL rather than a suffix on
-    `AgentConfig.openrouter_base_url` because the Decisions API sits on a
-    different path prefix (/api/alpha/decisions) from chat completions
-    (/api/v1/chat/completions), so it is not derivable from that base.
+    `AgentConfig.base_url`: Jev is served only by OpenRouter's Decisions API,
+    whichever provider the chat model uses, so it has its own URL and always
+    uses OPENROUTER_API_KEY.
 
     The thresholds below are the entire badge rule. `*_min` is what a check
     must clear to count as passed; `not_contradicted_floor` is the single veto
@@ -301,35 +343,43 @@ class VerifierConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    # OpenRouter (https://openrouter.ai) model id - deepseek/deepseek-v4.1-flash
-    # is fast/cheap and strong at structured tool-calling over data lookups
-    # like these; swap here (not in code) to retune.
-    openrouter_model: str = "deepseek/deepseek-v4.1-flash"
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Model id at `base_url`, any OpenAI-compatible chat completions API -
+    # deepseek-v4.1-flash is fast/cheap and strong at structured tool-calling
+    # over data lookups like these; swap here (not in code) to retune.
+    model: str = "deepseek/deepseek-v4.1-flash"
+    base_url: str = "https://openrouter.ai/api/v1"
+    # Name of the environment variable holding that provider's key.
+    api_key_env: str = "OPENROUTER_API_KEY"
+    # Header carrying one id per question, so the provider can route that
+    # question's calls together. OpenCode Go refuses requests without one.
+    session_header: str = "x-session-id"
     # How the FastAPI app (and er.cli.ask) spawn the MCP server subprocess -
     # see er.agent.mcp_server. Kept as a command list, not a code path, so a
     # future deployment can point at a different interpreter/entrypoint
     # without a code change.
-    mcp_server_command: list[str] = ["uv", "run", "python", "-m", "er.cli.mcp_server"]
-    max_tool_turns: int = 6
+    mcp_server_command: list[str] = ["python", "-m", "er.cli.mcp_server"]
+    max_tool_turns: int = 8
     # Retries for a model call that failed *transiently*: the connection
     # dropped before any response ("Server disconnected without sending a
     # response" - seen in practice, fine again on the next call), or a
     # gateway/overload status (429/502/503/504). Never for anything else - a
     # 400 like "input exceeds 8 MB" fails identically however often it is
     # sent. Backoff doubles per attempt.
-    openrouter_retries: int = 2
-    openrouter_retry_backoff_seconds: float = 0.75
+    retries: int = 2
+    retry_backoff_seconds: float = 0.75
     # Connecting normally takes ~0.07s; see er.agent.retry.timeout.
-    openrouter_connect_timeout_seconds: float = 10.0
+    connect_timeout_seconds: float = 10.0
     # Cap on each tool result's `data` as sent back to the model. Normal
     # results are far below it (search ~3k chars, profile ~1-15k); it exists
     # for the pathological ones - the full profile of CITIGROUP GLOBAL MARKETS
     # HOLDINGS INC. is ~7.6M chars because it inlines every attached
-    # identifier (30,480 of them, nearly all ISINs), which OpenRouter rejects
+    # identifier (30,480 of them, nearly all ISINs), which the provider rejects
     # outright ("total text input size exceeds 8 MB"). Over the cap, lists are trimmed shape-preserving
     # with each elision marked, and the model is told - see er.agent.orchestrator.
     max_tool_result_chars: int = 40_000
+    # Lets the model add one OpenUI Lang chart/table block to an answer (see
+    # er.agent.genui). Its values still pass the same fact-placeholder gate.
+    generative_ui: bool = True
     verifier: VerifierConfig = VerifierConfig()
 
 
@@ -346,6 +396,10 @@ class AppConfig(BaseModel):
     sec_13dg: Sec13DGConfig = Sec13DGConfig()
     ffiec_nic: FfiecNicConfig = FfiecNicConfig()
     sec_xbrl: SecXbrlConfig = SecXbrlConfig()
+    sec_adv_firms: SecAdvFirmsConfig = SecAdvFirmsConfig()
+    sec_form_d: SecFormDConfig = SecFormDConfig()
+    finra_short_volume: FinraShortVolumeConfig = FinraShortVolumeConfig()
+    sec_ftd: SecFtdConfig = SecFtdConfig()
     serving: ServingConfig = ServingConfig()
     workspace: WorkspaceConfig = WorkspaceConfig()
     entity: EntityConfig
@@ -366,12 +420,19 @@ class AppConfig(BaseModel):
         return url
 
     @property
-    def openrouter_api_key(self) -> str:
-        key = os.environ.get("OPENROUTER_API_KEY")
+    def llm_api_key(self) -> str:
+        key = os.environ.get(self.agent.api_key_env)
         if not key:
             raise RuntimeError(
-                "OPENROUTER_API_KEY is not set. Copy .env.example to .env and fill it in."
+                f"{self.agent.api_key_env} is not set. Copy .env.example to .env and fill it in."
             )
+        return key
+
+    @property
+    def jev_api_key(self) -> str:
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise RuntimeError("The Jev verifier needs OPENROUTER_API_KEY in .env.")
         return key
 
     @property
@@ -382,6 +443,16 @@ class AppConfig(BaseModel):
     def a2a_public_url(self) -> str:
         # Where other agents reach the API - advertised in the A2A agent card.
         return os.environ.get("A2A_PUBLIC_URL", "http://localhost:8000")
+
+    @property
+    def cors_origins(self) -> list[str]:
+        # Deployed web origins allowed to call the API, comma-separated.
+        return [origin.strip() for origin in os.environ.get("CORS_ORIGINS", "").split(",") if origin.strip()]
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        # Matches origins that change per deploy, e.g. a project's vercel.app URLs.
+        return os.environ.get("CORS_ORIGIN_REGEX") or None
 
     @property
     def a2a_api_key(self) -> str | None:
@@ -405,6 +476,10 @@ def load_config(path: str | Path = REPO_ROOT / "config" / "dev.yaml") -> AppConf
         cfg.sec_13dg,
         cfg.ffiec_nic,
         cfg.sec_xbrl,
+        cfg.sec_adv_firms,
+        cfg.sec_form_d,
+        cfg.finra_short_volume,
+        cfg.sec_ftd,
     ):
         section.raw_dir = REPO_ROOT / section.raw_dir
         section.processed_dir = REPO_ROOT / section.processed_dir

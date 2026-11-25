@@ -1,10 +1,11 @@
 """CLI: python -m er.cli.ask --question "..." [--entity-id <LEI>]
 
 Terminal test harness for er.agent.orchestrator - spawns the MCP server (see
-er.agent.mcp_server) over stdio, runs one question through the OpenRouter
+er.agent.mcp_server) over stdio, runs one question through the agent's
 tool-calling loop, and prints the answer, its Jev verification badge (see
 er.agent.verifier), and its evidence, entirely outside the web UI. Requires
-OPENROUTER_API_KEY in .env. Rendering lives in er.cli.ask_render.
+OPENROUTER_API_KEY in .env. Rendering lives
+in er.cli.ask_render.
 """
 
 from __future__ import annotations

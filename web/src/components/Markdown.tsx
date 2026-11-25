@@ -4,6 +4,8 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Citation, Evidence } from "@/lib/api";
 import CitationChip from "@/components/CitationChip";
+import OpenUIBlock from "@/components/OpenUIBlock";
+import { OPENUI_LANGS } from "@/lib/openui/library";
 
 /* ---------------------------------------------------------------------------
    Renders an agent answer as real Markdown (headings, bold, lists, GFM
@@ -19,24 +21,45 @@ import CitationChip from "@/components/CitationChip";
    empty href - so the renderer below never matched and citations fell through
    as dead links. We pass a urlTransform that lets the `citation:` scheme
    through untouched and delegates everything else to the default.
+
+   A fenced ```openui-lang block is generative UI (OpenUIBlock). Citation
+   rewriting skips fenced code, so a "[1]" inside it stays OpenUI syntax.
 --------------------------------------------------------------------------- */
+
+function openuiCode(node: unknown): string | null {
+  const child = (node as { children?: { tagName?: string; properties?: { className?: unknown }; children?: { value?: string }[] }[] })
+    ?.children?.[0];
+  const classes = child?.tagName === "code" ? child.properties?.className : null;
+  const language = Array.isArray(classes) ? String(classes.find((name) => String(name).startsWith("language-")) ?? "") : "";
+  if (!OPENUI_LANGS.has(language.replace("language-", ""))) return null;
+  return (child?.children ?? []).map((text) => text.value ?? "").join("");
+}
 
 export default function Markdown({
   content,
   citations,
   evidence,
   onCitationClick,
+  onFollowUp,
 }: {
   content: string;
   citations: Citation[];
   evidence?: Record<string, Evidence>;
   onCitationClick?: (evidenceId: string) => void;
+  onFollowUp?: (question: string) => void;
 }) {
   const markerToEvidence = new Map(citations.map((c) => [c.marker, c.evidence_id]));
-  const linked = content.replace(/\[(\d+)\](?!\()/g, (match, digits: string) => {
-    const evidenceId = markerToEvidence.get(Number(digits));
-    return evidenceId ? `[${digits}](citation:${evidenceId})` : match;
-  });
+  const linked = content
+    .split(/(```[\s\S]*?(?:```|$))/)
+    .map((part, index) =>
+      index % 2
+        ? part
+        : part.replace(/\[(\d+)\](?!\()/g, (match, digits: string) => {
+            const evidenceId = markerToEvidence.get(Number(digits));
+            return evidenceId ? `[${digits}](citation:${evidenceId})` : match;
+          }),
+    )
+    .join("");
 
   return (
     <div className="markdown answer-copy">
@@ -44,6 +67,10 @@ export default function Markdown({
         remarkPlugins={[remarkGfm]}
         urlTransform={(url) => (url.startsWith("citation:") ? url : defaultUrlTransform(url))}
         components={{
+          pre: ({ node, children }) => {
+            const code = openuiCode(node);
+            return code !== null ? <OpenUIBlock code={code} onFollowUp={onFollowUp} /> : <pre>{children}</pre>;
+          },
           a: ({ href, children }) => {
             if (href?.startsWith("citation:")) {
               const evidenceId = href.slice("citation:".length);

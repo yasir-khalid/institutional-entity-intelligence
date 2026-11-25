@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help ingest-gleif ingest-sec-13f ingest-sec-submissions ingest-sec-series-class ingest-openfigi ingest-nport ingest-sec-insiders ingest-sec-adv ingest-companies-house ingest-sec-13dg ingest-ffiec-nic ingest-sec-xbrl index validate benchmark pipeline test evaluate crosswalk-sec-13f build-entities build-knowledge-graph evaluate-agent publish pull-reviews
+.PHONY: help ingest-gleif ingest-sec-13f ingest-sec-submissions ingest-sec-series-class ingest-openfigi ingest-nport ingest-sec-insiders ingest-sec-adv ingest-companies-house ingest-sec-13dg ingest-ffiec-nic ingest-sec-xbrl ingest-sec-adv-firms ingest-sec-form-d ingest-finra-short-volume ingest-sec-ftd index validate benchmark pipeline test evaluate crosswalk-sec-13f build-entities build-knowledge-graph evaluate-agent publish pull-reviews
 
 help:
 	@echo "Institutional Entity Intelligence - available targets:"
@@ -21,6 +21,10 @@ help:
 	@echo "    make ingest-sec-13dg Download/parse structured Schedule 13D/G filings (~40 min a quarter)"
 	@echo "    make ingest-ffiec-nic Parse downloaded FFIEC NIC bank hierarchy CSVs"
 	@echo "    make ingest-sec-xbrl Fetch SEC XBRL company facts for issuers named in 13D/G and Forms 3/4/5"
+	@echo "    make ingest-sec-adv-firms Download/parse monthly Form ADV Part 1A adviser files (AUM, clients)"
+	@echo "    make ingest-sec-form-d Download/parse quarterly Form D private offering data sets"
+	@echo "    make ingest-finra-short-volume Download/parse FINRA daily Reg SHO short sale volume"
+	@echo "    make ingest-sec-ftd Download/parse SEC fails-to-deliver files"
 	@echo ""
 	@echo "  Shared pipeline (source-agnostic - runs after any/all ingest-* targets):"
 	@echo "    make index           Bulk-load GLEIF entities into OpenSearch (~20 min)"
@@ -91,6 +95,18 @@ ingest-ffiec-nic:
 
 ingest-sec-xbrl:
 	uv run python -m er.cli.ingest_sec_xbrl
+
+ingest-sec-adv-firms:
+	uv run python -m er.cli.ingest_sec_adv_firms
+
+ingest-sec-form-d:
+	uv run python -m er.cli.ingest_sec_form_d
+
+ingest-finra-short-volume:
+	uv run python -m er.cli.ingest_finra_short_volume
+
+ingest-sec-ftd:
+	uv run python -m er.cli.ingest_sec_ftd
 
 INGEST_TARGETS := ingest-gleif ingest-sec-13f
 

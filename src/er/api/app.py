@@ -56,7 +56,10 @@ from er.api.schemas import (
 from er.config import AppConfig, load_config
 from er.datasources.sec_adv.search import load_document
 from er.agent.tools import get_position_history
+from er.entity.advisers import resolve_adviser, search_advisers
 from er.entity.connections import load_connections
+from er.entity.market import load_fails, load_ownership, load_short_volume, resolve_security, search_securities
+from er.entity.offerings import load_offering, search_offerings
 from er.entity.profile import get_entity_profile
 from er.entity.resolution import load_match_decisions, record_review, review_queue
 from er.entity.search import match_result_to_matches, search_by_cusip, search_by_lei, search_by_name
@@ -115,7 +118,7 @@ async def _replace_mcp_client() -> Client | None:
 def _is_closed_mcp_connection(exc: BaseException) -> bool:
     """Identify the stdio client's known terminal transport failure.
 
-    Do not catch all network-like failures here: OpenRouter failures already
+    Do not catch all network-like failures here: model provider failures already
     have their own retry policy in ``er.agent.orchestrator`` and resetting a
     healthy local MCP subprocess would only mask the useful provider message.
     """
@@ -190,9 +193,11 @@ app = FastAPI(title="Institutional Entity Intelligence API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     # Any localhost port, not just 3000 - Next.js picks the next free port when
-    # 3000 is taken by another project. This API has no auth yet, so it must
-    # never be exposed to non-localhost origins as-is.
-    allow_origin_regex=r"http://localhost:\d+",
+    # 3000 is taken by another project - plus the deployed web origins in
+    # CORS_ORIGINS or CORS_ORIGIN_REGEX. This API has no auth yet: anyone who
+    # can reach it can submit reviews and spend model credit.
+    allow_origin_regex="|".join(filter(None, [r"http://localhost:\d+", _cfg().cors_origin_regex])),
+    allow_origins=_cfg().cors_origins,
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["*"],
 )
@@ -385,6 +390,75 @@ def position_history(cik: str, cusip: str, periods: int = Query(4, ge=2, le=8)) 
     return ToolResultOut(**result.model_dump())
 
 
+@app.get("/api/explore")
+def explore(q: str = Query(..., min_length=2)) -> dict:
+    """One query across the explore views: advisers, Form D filings and
+    13F-reported securities."""
+    store = get_store(_cfg())
+    offerings, _ = search_offerings(store, q, limit=6)
+    return {"query": q, "advisers": search_advisers(store, q, limit=6), "offerings": offerings,
+            "securities": search_securities(store, q, limit=6)}
+
+
+@app.get("/api/advisers")
+def advisers(q: str | None = None, state: str | None = None, firm_type: str | None = None,
+             fund_type: str | None = None, offset: int = Query(0, ge=0, le=5000),
+             limit: int = Query(50, ge=1, le=100)) -> dict:
+    items = search_advisers(get_store(_cfg()), q, state=state, firm_type=firm_type, fund_type=fund_type,
+                            offset=offset, limit=limit + 1)
+    return {"items": items[:limit], "next_offset": offset + limit if len(items) > limit else None}
+
+
+@app.get("/api/advisers/{crd}")
+def adviser(crd: str) -> dict:
+    doc = resolve_adviser(get_store(_cfg()), crd, "crd")
+    if doc is None:
+        raise HTTPException(404, f"no Form ADV adviser with CRD {crd}")
+    return doc
+
+
+@app.get("/api/offerings")
+def offerings(q: str | None = None, kind: str | None = None, fund_type: str | None = None,
+              industry: str | None = None, state: str | None = None,
+              days: int | None = Query(None, ge=1, le=92), new_only: bool = False, sort: str = "newest",
+              offset: int = Query(0, ge=0, le=5000), limit: int = Query(50, ge=1, le=100)) -> dict:
+    if kind not in (None, "fund", "company"):
+        raise HTTPException(400, "kind must be fund or company")
+    items, window = search_offerings(get_store(_cfg()), q, kind=kind, fund_type=fund_type, industry=industry,
+                                     state=state, days=days, new_only=new_only, sort=sort, offset=offset,
+                                     limit=limit + 1)
+    return {"items": items[:limit], "window": window, "next_offset": offset + limit if len(items) > limit else None}
+
+
+@app.get("/api/offerings/{accession_number}")
+def offering(accession_number: str) -> dict:
+    doc = load_offering(get_store(_cfg()), accession_number)
+    if doc is None:
+        raise HTTPException(404, f"no Form D filing {accession_number}")
+    return doc
+
+
+@app.get("/api/securities")
+def securities(q: str | None = None, limit: int = Query(50, ge=1, le=100)) -> dict:
+    return {"items": search_securities(get_store(_cfg()), q, limit=limit)}
+
+
+@app.get("/api/securities/{identifier}")
+def security(identifier: str, holders: int = Query(50, ge=1, le=100), days: int = Query(30, ge=5, le=60)) -> dict:
+    store = get_store(_cfg())
+    resolved = resolve_security(store, identifier)
+    if resolved is None:
+        raise HTTPException(404, f"no 13F, short-volume or fails data for {identifier}")
+    cusip, symbol = resolved["cusip"], resolved["symbol"]
+    return {
+        "cusip": cusip,
+        "symbol": symbol,
+        "ownership": load_ownership(store, cusip, limit=holders) if cusip else None,
+        "short_volume": load_short_volume(store, symbol, days=days) if symbol else [],
+        "fails": load_fails(store, cusip) if cusip else None,
+    }
+
+
 @app.post("/api/reviews", response_model=MatchReviewOut)
 def add_review(body: ReviewRequest) -> MatchReviewOut:
     """Appends a human review of a match. It takes effect in the graph on the
@@ -420,12 +494,6 @@ def _investigation(investigation_id: str) -> dict:
         return research.get_investigation(get_store(_cfg()), investigation_id)
     except KeyError as exc:
         raise HTTPException(404, "Investigation not found") from exc
-
-
-@app.get("/api/investigations")
-def investigations(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0, le=9000)) -> dict:
-    items = research.list_investigations(get_store(_cfg()), limit + 1, offset)
-    return {"items": items[:limit], "next_offset": offset + limit if len(items) > limit else None}
 
 
 @app.get("/api/investigations/{investigation_id}")
@@ -471,7 +539,7 @@ def rename_investigation(investigation_id: str, body: InvestigationTitle) -> dic
 
 @app.get("/api/sources/sec-adv/{pdf_file_name}")
 def sec_adv_document(pdf_file_name: str) -> Response:
-    content = load_document(_cfg(), get_store(_cfg()), pdf_file_name)
+    content = load_document(get_store(_cfg()), pdf_file_name)
     if content is None:
         raise HTTPException(404, "SEC Form ADV brochure not found")
     return Response(
@@ -511,7 +579,7 @@ async def _saved_runner(job: dict, on_event: Callable[[dict], Awaitable[None]]) 
 @app.post("/api/ask", response_model=AskResponse)
 async def ask_question(body: AskRequest) -> AskResponse:
     """Answer a question about an entity via er.agent.orchestrator, which
-    drives an OpenRouter model through the MCP tools in er.agent.mcp_server
+    drives the configured model through the MCP tools in er.agent.mcp_server
     (started once at app startup - see `lifespan` above) and returns an
     answer with citations to the Evidence records those tool calls produced."""
     try:

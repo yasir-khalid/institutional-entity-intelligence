@@ -11,7 +11,7 @@ import pytest
 
 from er.config import load_config
 from er.serving import publish
-from er.serving.store import ADV_PAGES, COVERAGE, DECISIONS, XBRL_FACTS, XBRL_ISSUERS, MemoryStore
+from er.serving.store import ADV_PAGES, COVERAGE, DECISIONS, XBRL_FACTS, XBRL_ISSUERS, MemoryStore, OpenSearchStore
 from er.serving.coverage import build_coverage
 from er.entity.resolution import review_queue, record_review
 
@@ -64,6 +64,9 @@ class SearchStorage:
     def read(self, alias, doc_id):
         return self.documents[self.aliases[alias][0]][doc_id]
 
+    def get(self, index, id, **kwargs):
+        return {"_source": dict(self.read(index, id))}
+
 
 def bulk_storage(client, actions, **kwargs):
     for action in actions:
@@ -76,6 +79,8 @@ def bulk_storage(client, actions, **kwargs):
 @pytest.fixture
 def publication(tmp_path, monkeypatch):
     cfg = load_config().model_copy(deep=True)
+    cfg.serving.packed = []
+    cfg.serving.keep_previous_generation = True
     for field in type(cfg).model_fields:
         section = getattr(cfg, field)
         if hasattr(section, "processed_dir"):
@@ -200,3 +205,22 @@ def test_xbrl_publishes_one_dated_series_per_concept_with_duplicates_collapsed(p
     assert [observation["value"] for observation in document["observations"]] == [90.0, 100.0]
     issuer = client.read(f"{cfg.serving.prefix}_{XBRL_ISSUERS}", "0001571996")
     assert issuer["tickers"] == ["DELL"]
+
+
+def test_packed_layout_replaces_per_index_aliases_atomically_and_prunes_the_old_generation(publication):
+    cfg, client, page = publication
+    publish.run_all(cfg)
+    unpacked = {name: list(indexes) for name, indexes in client.aliases.items()}
+    cfg.serving.packed = [ADV_PAGES, XBRL_FACTS]
+    cfg.serving.keep_previous_generation = False
+
+    publish.run_all(cfg)
+
+    prefix = cfg.serving.prefix
+    assert f"{prefix}_{ADV_PAGES}" not in {alias for alias, indexes in client.aliases.items() if indexes}
+    assert not any(client.visible_snapshots[-1].get(f"{prefix}_{name}") for name in (ADV_PAGES, XBRL_FACTS))
+    assert all(old not in client.documents for indexes in unpacked.values() for old in indexes)
+    store = OpenSearchStore(client, prefix, frozenset(cfg.serving.packed))
+    document = store.get(ADV_PAGES, "hash:1:archive:brochure.pdf")
+    assert document["text"] == page["text"]
+    assert "serving_kind" not in document

@@ -32,7 +32,7 @@ Endpoint shape (verified live against the API, 2026-09-22):
      "usage": {"input_tokens": ..., "output_tokens": ..., "cost": ...}}
 
 Note this is *not* /api/v1/chat/completions - it is a different path prefix
-from `agent.openrouter_base_url`, which is why the URL is its own config
+from `agent.base_url`, which is why the URL is its own config
 field rather than a suffix appended to that base.
 
 This module performs no entity resolution and never edits the answer: a
@@ -221,7 +221,7 @@ async def _post_decisions(
     async with httpx.AsyncClient(timeout=timeout(vcfg.timeout_seconds, vcfg.connect_timeout_seconds)) as http:
         resp = await http.post(
             vcfg.decisions_url,
-            headers={"Authorization": f"Bearer {cfg.openrouter_api_key}"},
+            headers={"Authorization": f"Bearer {cfg.jev_api_key}"},
             json={"model": vcfg.model, "state": state, "questions": questions},
         )
         resp.raise_for_status()

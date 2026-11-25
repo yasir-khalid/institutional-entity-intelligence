@@ -1,0 +1,48 @@
+{
+  "_comment": "Single source of truth for generative UI in research answers. The renderer (src/lib/openui/library.ts) and the agent's prompt section (scripts/openui-prompt.mjs -> config/openui/system-prompt.md) are both derived from this file. Components that load external resources or collect input are excluded.",
+  "keep": [
+    "Stack",
+    "Card",
+    "CardHeader",
+    "TextContent",
+    "Callout",
+    "Separator",
+    "Table",
+    "Col",
+    "BarChart",
+    "LineChart",
+    "AreaChart",
+    "HorizontalBarChart",
+    "Series",
+    "PieChart",
+    "Slice",
+    "Tabs",
+    "TabItem",
+    "TagBlock",
+    "Tag",
+    "Buttons",
+    "Button",
+    "MetricIndicatorInline",
+    "OverviewCardItem",
+    "OverviewCardBlock",
+    "Icon",
+    "IconText"
+  ],
+  "preamble": "You can add an interactive visualization to the answer you pass to submit_answer, using openui-lang, a compact declarative UI language the research workspace renders in place.",
+  "rules": [
+    "Write the answer itself in markdown first, with [n] citations, exactly as you would without a visualization.",
+    "Add ONE ```openui-lang fenced block AFTER the text only when it genuinely helps: a value across report periods or snapshots (LineChart or BarChart), a ranking or comparison (Table or HorizontalBarChart), a mix (PieChart), or two to four headline figures (OverviewCardBlock). A qualitative answer gets no block.",
+    "Never type a number in the block, not even a chart value. Every value is its fact placeholder: inside a string (a table cell, a caption) write \"{{f:fact_id}}\" and it renders formatted ($1,234 or 5.2%); as a bare chart value write {{f:fact_id}} and it renders the raw number. The gate rejects the whole answer if a block contains a literal number, exactly as it does for the text.",
+    "Leave out optional numeric arguments such as a chart height or a trend value; they are numbers you would have to type.",
+    "A placeholder in the block needs a citation like any other: cite its evidence with an [n] marker in the text or in the block's CardHeader title.",
+    "Labels are words, or a date copied whole from a cited fact's as_of (for example a report period). Never invent a label that implies a value.",
+    "Never show the same data twice: if the block has a table or chart, don't repeat it as a markdown table or list; the text should interpret it.",
+    "Give every chart a CardHeader title that names the metric, unit and period, with its citation marker, e.g. \"Reported 13F value by period (USD) [1]\".",
+    "Never use @OpenUrl, images or links. Buttons may only use @ToAssistant with a short follow-up question.",
+    "Keep blocks small: at most one Card with one chart or table, plus up to 3 follow-up Buttons. root must be a Stack."
+  ],
+  "examples": [
+    "root = Stack([card, follow])\ncard = Card([header, chart, note])\nheader = CardHeader(\"Reported value of the position by 13F period (USD) [1]\")\nchart = LineChart([\"30-SEP-2025\", \"31-DEC-2025\", \"31-MAR-2026\"], [Series(\"Value\", [{{f:f_a1}}, {{f:f_a2}}, {{f:f_a3}}])])\nnote = TextContent(\"Latest change: {{f:f_a4}} [2]\", \"small\")\nfollow = Buttons([Button(\"Who else holds it?\", @ToAssistant(\"Who else holds this security?\"))])",
+    "root = Stack([card])\ncard = Card([header, table])\nheader = CardHeader(\"Largest client types by regulatory AUM [1]\")\ntable = Table([Col(\"Client type\", [\"Pooled investment vehicles\", \"Other investment advisers\"]), Col(\"RAUM\", [\"{{f:f_b1}}\", \"{{f:f_b2}}\"]), Col(\"Clients\", [\"{{f:f_b3}}\", \"{{f:f_b4}}\"])])"
+  ]
+}

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from er.agent import orchestrator
-from er.agent.tools import get_entity_connections, get_entity_profile_tool, get_relationship_hierarchy
+from er.agent.tools import get_entity_connections, get_entity_profile_tool, get_relationship_hierarchy, search_private_offerings
 from er.config import (
     AppConfig,
     BenchmarkConfig,
@@ -21,7 +21,7 @@ from er.config import (
     SearchConfig,
     Sec13FConfig,
 )
-from er.serving.store import ENTITIES, RELATIONSHIPS, MemoryStore
+from er.serving.store import ENTITIES, FORM_D, RELATIONSHIPS, MemoryStore
 
 
 @pytest.fixture
@@ -195,6 +195,25 @@ def test_hierarchy_query_hash_is_stable_for_same_args(store):
     assert r1.evidence[0].query_hash == r2.evidence[0].query_hash
 
 
+def test_offering_rankings_filter_the_whole_window_before_limiting(store):
+    base = {"issuer_cik": "0000000001", "issuer_name": "Venture Fund", "is_fund": True,
+            "fund_type": "Venture Capital Fund", "is_amendment": False}
+    for accession, fields in (
+        ("newest", {"filing_date": "2026-09-30", "total_sold": 10}),
+        ("largest", {"filing_date": "2026-09-24", "total_sold": 100}),
+        ("outside-window", {"filing_date": "2026-09-23", "total_sold": 1000}),
+        ("other-type", {"filing_date": "2026-09-30", "total_sold": 2000, "fund_type": "Private Equity Fund"}),
+    ):
+        store.put(FORM_D, accession, {**base, "accession_number": accession, **fields})
+
+    for order, expected in (("newest", "newest"), ("largest", "largest")):
+        result = search_private_offerings(store, query="Venture", kind="fund", fund_type="Venture Capital Fund",
+                                          days=7, sort=order, limit=1)
+        assert result.data["window"] == {"from": "2026-09-24", "to": "2026-09-30"}
+        assert [row["accession_number"] for row in result.data["offerings"]] == [expected]
+        assert result.data["more"] is True
+
+
 def test_agent_requires_an_mcp_lookup_and_valid_citation_before_submitting(cfg, monkeypatch):
     """Regression test for an OpenRouter response that tried to answer from
     the system prompt, without ever using the MCP server. The orchestrator
@@ -270,13 +289,13 @@ def test_agent_requires_an_mcp_lookup_and_valid_citation_before_submitting(cfg, 
     tool_choices = []
     first_messages = []
 
-    async def fake_call(_cfg, _messages, _tools, tool_choice=None):
+    async def fake_call(_cfg, _messages, _tools, tool_choice=None, session=None):
         tool_choices.append(tool_choice)
         if not first_messages:
             first_messages.extend(_messages)
         return next(responses)
 
-    monkeypatch.setattr(orchestrator, "_call_openrouter", fake_call)
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call)
 
     result = asyncio.run(
         orchestrator.ask(

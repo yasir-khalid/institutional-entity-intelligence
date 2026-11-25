@@ -29,13 +29,19 @@ def _write_rows(cfg, query, writer, model, provenance) -> int:
         for row in batch.to_pylist():
             writer.add(model(**row, **provenance).model_dump())
             count += 1
-    writer.close()
     con.close()
     return count
 
 
-def parse_zip(cfg: AppConfig, path: Path) -> dict[str, int]:
-    cfg.sec_insiders.processed_dir.mkdir(parents=True, exist_ok=True)
+def _writers(cfg: AppConfig) -> dict[str, BatchedParquetWriter]:
+    out, size = cfg.sec_insiders.processed_dir, cfg.sec_insiders.batch_size
+    return {
+        "relationships": BatchedParquetWriter(out / "sec_insider_relationships.parquet", RELATIONSHIP_SCHEMA, size),
+        "transactions": BatchedParquetWriter(out / "sec_insider_transactions.parquet", TRANSACTION_SCHEMA, size),
+    }
+
+
+def parse_zip(cfg: AppConfig, path: Path, writers: dict[str, BatchedParquetWriter]) -> dict[str, int]:
     provenance = {
         "source_file": path.name,
         "snapshot_date": path.stem.split("_")[0],
@@ -57,11 +63,7 @@ def parse_zip(cfg: AppConfig, path: Path) -> dict[str, int]:
                 FROM {_read(paths['SUBMISSION.tsv'])} s
                 JOIN {_read(paths['REPORTINGOWNER.tsv'])} o USING (ACCESSION_NUMBER)
             """,
-            BatchedParquetWriter(
-                cfg.sec_insiders.processed_dir / "sec_insider_relationships.parquet",
-                RELATIONSHIP_SCHEMA,
-                cfg.sec_insiders.batch_size,
-            ),
+            writers["relationships"],
             InsiderRelationship,
             provenance,
         )
@@ -87,11 +89,7 @@ def parse_zip(cfg: AppConfig, path: Path) -> dict[str, int]:
         transactions = _write_rows(
             cfg,
             " UNION ALL ".join(transaction_parts),
-            BatchedParquetWriter(
-                cfg.sec_insiders.processed_dir / "sec_insider_transactions.parquet",
-                TRANSACTION_SCHEMA,
-                cfg.sec_insiders.batch_size,
-            ),
+            writers["transactions"],
             InsiderTransaction,
             provenance,
         )
@@ -99,8 +97,15 @@ def parse_zip(cfg: AppConfig, path: Path) -> dict[str, int]:
 
 
 def run_all(cfg: AppConfig) -> dict[str, int]:
-    path = download_if_missing(
-        cfg.sec_insiders.source_url,
-        cfg.sec_insiders.raw_dir / cfg.sec_insiders.source_file,
-    )
-    return parse_zip(cfg, path)
+    source = cfg.sec_insiders
+    download_if_missing(source.source_url, source.raw_dir / source.source_file)
+    for url in source.history_urls:
+        download_if_missing(url, source.raw_dir / url.rsplit("/", 1)[-1])
+    writers = _writers(cfg)
+    totals = {"relationships": 0, "transactions": 0}
+    for path in sorted(source.raw_dir.glob("*_form345.zip")):
+        for name, count in parse_zip(cfg, path, writers).items():
+            totals[name] += count
+    for writer in writers.values():
+        writer.close()
+    return totals

@@ -40,12 +40,6 @@ def get_investigation(store: Store, investigation_id: str) -> dict:
     return copy.deepcopy(doc)
 
 
-def list_investigations(store: Store, limit: int = 50, offset: int = 0) -> list[dict]:
-    return store.find(
-        INVESTIGATIONS, sort=(("updated_at", "desc"),), size=offset + limit,
-        fields=("id", "title", "entity_id", "status", "updated_at", "created_at"))[offset:]
-
-
 def _save(store: Store, doc: dict, **changes) -> dict:
     updated = {**doc, **changes, "revision": doc["revision"] + 1, "updated_at": now()}
     if not store.compare_and_put(INVESTIGATIONS, doc["id"], doc["revision"], updated):

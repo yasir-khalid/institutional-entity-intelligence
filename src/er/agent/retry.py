@@ -1,4 +1,4 @@
-"""What counts as a *transient* failure when calling OpenRouter - shared by
+"""What counts as a *transient* failure when calling a model provider - shared by
 the chat-completion calls in er.agent.orchestrator and the Decisions call in
 er.agent.verifier, so both retry exactly the same things.
 
@@ -40,7 +40,7 @@ def is_transient(exc: BaseException) -> bool:
 
 def timeout(total_seconds: float, connect_seconds: float) -> httpx.Timeout:
     """A request timeout with a much shorter cap on *connecting*. Connecting to
-    openrouter.ai normally takes ~0.07s; a connection that isn't open within a
+    a provider normally takes ~0.07s; a connection that isn't open within a
     few seconds is not going to open, and waiting the full request timeout for
     it (30s for Jev, 90s for chat) just delays the retry that will work."""
     return httpx.Timeout(total_seconds, connect=connect_seconds)

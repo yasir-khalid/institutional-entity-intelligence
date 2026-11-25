@@ -2,7 +2,7 @@
 questions about entities in this dataset: search, full profile, and GLEIF
 relationship hierarchy. Runnable directly by any MCP client (Claude Desktop,
 Cursor, ...) via `python -m er.cli.mcp_server` (stdio transport) - er.agent's
-own OpenRouter-backed agent (er.agent.orchestrator) is just one more client of
+own agent (er.agent.orchestrator) is just one more client of
 this same server, not a special case.
 
 No entity-resolution logic lives here - see er.agent.tools, which this module
@@ -24,6 +24,14 @@ from er.agent.tools import get_issuer_financials as _get_issuer_financials
 from er.agent.tools import get_security as _get_security
 from er.agent.tools import get_position_history as _get_position_history
 from er.agent.tools import search_adv_documents as _search_adv_documents
+from er.agent.tools import get_adviser_profile as _get_adviser_profile
+from er.agent.tools import get_security_ownership as _get_security_ownership
+from er.agent.tools import get_security_holders as _get_security_holders
+from er.agent.tools import get_short_activity as _get_short_activity
+from er.agent.tools import get_private_entity as _get_private_entity
+from er.agent.tools import lookup_private_entity as _lookup_private_entity
+from er.agent.tools import search_filings as _search_filings
+from er.agent.tools import search_private_offerings as _search_private_offerings
 from er.config import load_config
 from er.serving.store import get_store
 
@@ -38,7 +46,20 @@ mcp = MCPServer(
         "share classes a fund registrant has; get_security says what a CUSIP, ticker or FIGI is. "
         "get_issuer_financials reports an issuer's own as-filed financial statement values "
         "(revenue, net income, assets) by CIK, ticker or name, with the change between periods "
-        "and the balance-sheet identity already computed by registered formulas."
+        "and the balance-sheet identity already computed by registered formulas. "
+        "get_adviser_profile reads an investment adviser's Form ADV Part 1A answers (regulatory AUM and its "
+        "history, clients, private funds); search_private_offerings lists Form D private raises; "
+        "get_security_ownership says which 13F filers report a security and how that changed; "
+        "get_short_activity gives FINRA short sale volume and SEC fails-to-deliver. "
+        "If search_entity has no plausible GLEIF match for a private SPV or project company, "
+        "call lookup_private_entity: it returns a PROVISIONAL, curated public-source record, "
+        "never a GLEIF LEI, including both incoming and outgoing relationships. One lookup is "
+        "enough to state the direct owner; do not enumerate the whole graph unless asked. "
+        "get_security_holders reverses N-PORT: an issuer name or CUSIP -> "
+        "registered fund reports and registrants holding it, with the N-PORT caveat. "
+        "search_filings searches SEC EDGAR full-text and returns cited 10-K/10-Q/8-K passages "
+        "for narrative disclosures that are not in the structured tables. Use at most two "
+        "search_filings calls; start with a short exact phrase and the issuer CIK when known."
     ),
 )
 
@@ -146,6 +167,98 @@ def get_issuer_financials(
     return _get_issuer_financials(
         get_store(load_config()), identifier, id_type=id_type, tag=tag, as_of=as_of, periods=periods
     )
+
+
+@mcp.tool()
+def get_adviser_profile(identifier: str, id_type: str = "crd") -> ToolResult:
+    """An SEC-registered (or exempt reporting) investment adviser's Form ADV
+    Part 1A answers: regulatory AUM (Item 5.F), accounts, employees, private
+    fund count and gross assets, AUM by client type (Item 5.D), and its
+    regulatory AUM in every monthly snapshot ingested with the change computed.
+    id_type is one of "crd", "lei", "cik" or "name". Regulatory AUM is gross
+    (leverage, uncalled commitments) - say so when you compare it to anything."""
+    return _get_adviser_profile(get_store(load_config()), identifier, id_type=id_type)
+
+
+@mcp.tool()
+def search_private_offerings(
+    query: str | None = None,
+    kind: str | None = None,
+    fund_type: str | None = None,
+    industry: str | None = None,
+    state: str | None = None,
+    days: int | None = None,
+    new_only: bool = False,
+    sort: str = "newest",
+    limit: int = 20,
+) -> ToolResult:
+    """Form D notices of private (Regulation D) offerings, newest first. query
+    is a phrase in the issuer's name, or else a related person's name. kind is
+    "fund" (pooled investment funds) or "company" (operating companies);
+    fund_type is "Hedge Fund", "Private Equity Fund", "Venture Capital Fund" or
+    "Other Investment Fund"; industry is a Form D industry group such as
+    "Biotechnology"; state is a two-letter code; days counts back from the
+    newest filing in the data. sort is "newest" or "largest" (by amount sold) -
+    use "largest" to rank who raised the most, since a newest-first page is not
+    a ranking. Returns amounts sold and offered as facts and
+    the total sold across the listed original filings as a derived fact."""
+    return _search_private_offerings(get_store(load_config()), query, kind=kind, fund_type=fund_type,
+                                     industry=industry, state=state, days=days, new_only=new_only, sort=sort,
+                                     limit=limit)
+
+
+@mcp.tool()
+def get_security_ownership(identifier: str, limit: int = 15) -> ToolResult:
+    """Institutional ownership of one security from 13F filings, by CUSIP or
+    ticker: per report period, how many filers reported it and their total
+    value and shares; the largest holders in the latest period with their
+    share change since the previous period (derived facts). This is 13F
+    investment discretion over long positions, not beneficial ownership."""
+    return _get_security_ownership(get_store(load_config()), identifier, limit=limit)
+
+
+@mcp.tool()
+def get_short_activity(identifier: str, days: int = 20) -> ToolResult:
+    """A security's FINRA daily short sale volume, the short share of each
+    day's volume (derived), and its SEC fails-to-deliver balances, by ticker or
+    CUSIP. Short sale volume is not short interest - never call it that."""
+    return _get_short_activity(get_store(load_config()), identifier, days=days)
+
+
+@mcp.tool()
+def lookup_private_entity(query: str, jurisdiction: str | None = None, limit: int = 10) -> ToolResult:
+    """Search the curated private-entity registry for SPVs and project companies
+    that have no GLEIF LEI (for example Beignet Investor LLC, Laidley LLC or
+    Pelican Leap LLC). Results are PROVISIONAL - cite the attached public source
+    and never present them as GLEIF-verified ownership."""
+    return _lookup_private_entity(query, jurisdiction=jurisdiction, limit=limit)
+
+
+@mcp.tool()
+def get_private_entity(entity_id: str) -> ToolResult:
+    """Read one curated private-entity record by its provisional id, including
+    its cited relationships. This is separate from get_entity_profile, which
+    only accepts a GLEIF LEI."""
+    return _get_private_entity(entity_id)
+
+
+@mcp.tool()
+def get_security_holders(identifier: str, id_type: str = "name", limit: int = 25) -> ToolResult:
+    """Reverse N-PORT holder lookup: which registered fund reports and
+    registrants report holding a security issued by this issuer name or CUSIP,
+    with reported value and report date. id_type is "name" or "cusip". This is
+    registered-fund fair value, not a legal ownership register; it excludes
+    private funds, separate accounts and non-fund holders."""
+    return _get_security_holders(load_config(), identifier, id_type=id_type, limit=limit)
+
+
+@mcp.tool()
+def search_filings(query: str, cik: str | None = None, forms: list[str] | None = None, limit: int = 5) -> ToolResult:
+    """Search SEC EDGAR full-text for a phrase and return cited filing passages
+    (form, date, CIK, accession and URL). Use for narrative disclosures - JV
+    terms, lease/RVG language, risk factors - that are not in structured tables.
+    Optionally restrict by CIK and forms; forms default to 10-K/10-Q/8-K."""
+    return _search_filings(load_config(), query, cik=cik, forms=forms, limit=limit)
 
 
 def run() -> None:

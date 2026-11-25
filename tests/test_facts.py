@@ -53,3 +53,23 @@ def test_identifiers_and_dates_copied_whole_are_not_new_numbers():
 
     assert render_answer("CIK 0001600177 [1].", facts, set(), question)[0] is None
     assert render_answer("It rose 31% [1].", facts, {"ev_profile"}, question)[0] is None
+
+
+def test_ui_block_values_come_from_placeholders_only():
+    address = FactAddress(source="SEC 13F", document_id="0001", locator="INFOTABLE", field="VALUE")
+    value = Fact(fact_id="f_v", evidence_id="ev_1", subject="cik:1", predicate="holding.reported_value",
+                 value=1500, unit="USD", as_of="31-MAR-2026", address=address)
+    facts = {"f_v": value}
+    block = (
+        "Grew [1].\n```openui-lang\nroot = Stack([chart, table])\n"
+        'chart = BarChart(["31-MAR-2026"], [Series("Value", [{{f:f_v}}])])\n'
+        'table = Table([Col("Value", ["{{f:f_v}}"])])\n```'
+    )
+    rendered, error = render_answer(block, facts, {"ev_1"})
+    assert error is None
+    assert '[Series("Value", [1500])]' in rendered and 'Col("Value", ["$1,500"])' in rendered
+
+    assert render_answer(block.replace("[{{f:f_v}}]", "[2500]"), facts, {"ev_1"})[0] is None
+    # Copying the exact reported amount is still a literal the model typed: it
+    # must use the placeholder, not just repeat a value it happened to see.
+    assert render_answer("It reported 1500 [1].", facts, {"ev_1"})[0] is None

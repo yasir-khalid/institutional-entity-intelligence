@@ -1,0 +1,10 @@
+# The API deploys from the repo root; the web app is its own Vercel project.
+web
+data
+tmp
+tests
+experiments
+docs
+.venv
+.env
+**/__pycache__

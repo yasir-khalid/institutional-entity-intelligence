@@ -42,7 +42,7 @@ class Sec13FHolding(BaseModel):
 
     accession_number: str
     infotable_sk: str | None = None
-    name_of_issuer: str
+    name_of_issuer: str | None = None
     title_of_class: str | None = None
     cusip: str | None = None
     figi: str | None = None

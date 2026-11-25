@@ -17,11 +17,14 @@ from urllib.parse import quote
 
 from er.config import AppConfig
 from er.datasources.sec_adv.search import search_pages
+from er.entity.advisers import resolve_adviser
 from er.entity.connections import load_connections
 from er.entity.funds import FUND_ID_TYPES, load_fund_series
 from er.entity.models import NPortFundReport
 from er.entity.ownership import load_beneficial_owners
 from er.entity.positions import load_position_rows
+from er.entity.market import load_fails, load_ownership, load_short_volume, resolve_security
+from er.entity.offerings import search_offerings
 from er.entity.profile import get_entity_profile
 from er.entity.securities import SECURITY_ID_TYPES, load_securities
 from er.entity.search import match_result_to_matches, search_by_cusip, search_by_lei, search_by_name
@@ -197,7 +200,195 @@ def search_entity(
                     field="contribution",
                 )
             )
-    return ToolResult(data={"matches": [m.model_dump() for m in matches]}, evidence=[evidence], facts=facts)
+    private_matches = []
+    if search_type == "name":
+        try:
+            from er.knowledge.private_entities import load_private_entities
+
+            registry = load_private_entities()
+            private_matches = [
+                {
+                    "entity_id": e.id,
+                    "name": e.name,
+                    "jurisdiction": e.jurisdiction,
+                    "resolution_status": "PROVISIONAL",
+                    "confidence": e.confidence,
+                }
+                for e in registry.find(query, limit=5)
+            ]
+        except (FileNotFoundError, ValueError):
+            private_matches = []
+    return ToolResult(
+        data={"matches": [m.model_dump() for m in matches],
+              **({"private_entity_matches": private_matches} if private_matches else {})},
+        evidence=[evidence], facts=facts,
+    )
+
+
+def _private_entity_facts(registry, entity, evidence: Evidence) -> list[Fact]:
+    """Facts for outgoing and incoming curated relationships, so an ownership
+    statement can cite a percentage instead of typing it."""
+    facts: list[Fact] = [
+        _fact(evidence, subject=entity.id, predicate="private_entity.name", value=entity.name,
+              document_id=entity.id, locator=f"private_entities.json:{entity.id}", field="name")
+    ]
+    if entity.registration_id:
+        facts.append(_fact(evidence, subject=entity.id, predicate="private_entity.registration_id",
+                           value=entity.registration_id, document_id=entity.id,
+                           locator=f"private_entities.json:{entity.id}", field="registration_id"))
+    for rel in entity.relationships:
+        if rel.pct is not None:
+            facts.append(_fact(evidence, subject=entity.id, predicate=f"private_relationship.{rel.type}.pct",
+                               value=rel.pct, unit="percent", document_id=entity.id,
+                               locator=f"private_entities.json:{entity.id}:to={rel.to}", field="pct"))
+    for other in registry.entities.values():
+        for rel in other.relationships:
+            if rel.to == entity.id and rel.pct is not None:
+                facts.append(_fact(evidence, subject=entity.id,
+                                   predicate=f"private_relationship.incoming.{rel.type}.pct",
+                                   value=rel.pct, unit="percent", document_id=entity.id,
+                                   locator=f"private_entities.json:{other.id}:to={entity.id}", field="pct"))
+    return facts
+
+
+def lookup_private_entity(query: str, jurisdiction: str | None = None, limit: int = 10) -> ToolResult:
+    """Search the curated private-entity registry for SPVs and project companies
+    that have no GLEIF LEI. Results are PROVISIONAL: cited to a public source,
+    never merged into the canonical GLEIF entity layer."""
+    from er.knowledge.private_entities import load_private_entities
+
+    qh = _query_hash("lookup_private_entity", query=query, jurisdiction=jurisdiction, limit=limit)
+    try:
+        registry = load_private_entities()
+    except FileNotFoundError:
+        return ToolResult(data={"found": False, "matches": [],
+                                "reason": "private-entity registry is not installed"},
+                          evidence=[Evidence(evidence_id=_evidence_id(),
+                                             source="Curated private-entity registry",
+                                             fact_type="lookup", criteria=[f'Query name = "{query}"'],
+                                             result_count=0, query_hash=qh,
+                                             warnings=["Private-entity registry is not installed."])])
+    matches = registry.find(query, jurisdiction=jurisdiction, limit=limit)
+    evidence = Evidence(
+        evidence_id=_evidence_id(),
+        source="Curated private-entity registry",
+        fact_type="records",
+        criteria=[f'Query name = "{query}"'] + ([f"Jurisdiction = {jurisdiction}"] if jurisdiction else []),
+        record_refs=[e.id for e in matches],
+        fields_used=["name", "aliases", "jurisdiction", "registration_id", "relationships"],
+        result_count=len(matches),
+        query_hash=qh,
+        warnings=[
+            "PROVISIONAL: these are curated public-source records for private SPVs, not GLEIF LEI records. "
+            "Do not present them as registry-verified ownership; cite the attached source and date."
+        ],
+    )
+    facts: list[Fact] = []
+    for e in matches:
+        facts.extend(_private_entity_facts(registry, e, evidence))
+    return ToolResult(data={"found": bool(matches), "matches": [registry.payload(e) for e in matches]},
+                      evidence=[evidence], facts=facts)
+
+
+def get_private_entity(entity_id: str) -> ToolResult:
+    """Read one curated private-entity record by its provisional id."""
+    from er.knowledge.private_entities import load_private_entities
+
+    qh = _query_hash("get_private_entity", entity_id=entity_id)
+    try:
+        registry = load_private_entities()
+    except FileNotFoundError:
+        return ToolResult(data={"found": False, "entity": None, "reason": "private-entity registry is not installed"},
+                          evidence=[Evidence(evidence_id=_evidence_id(),
+                                             source="Curated private-entity registry",
+                                             fact_type="lookup", criteria=[f"Entity ID = {entity_id}"],
+                                             result_count=0, query_hash=qh,
+                                             warnings=["Private-entity registry is not installed."])])
+    entity = registry.get(entity_id)
+    evidence = Evidence(
+        evidence_id=_evidence_id(),
+        source="Curated private-entity registry",
+        fact_type="lookup",
+        criteria=[f"Entity ID = {entity_id}"],
+        record_refs=[entity_id],
+        fields_used=["name", "aliases", "jurisdiction", "registration_id", "relationships"],
+        result_count=1 if entity else 0,
+        query_hash=qh,
+        warnings=["PROVISIONAL: curated public-source record, not a GLEIF LEI."],
+    )
+    return ToolResult(data={"found": entity is not None, "entity": registry.payload(entity) if entity else None},
+                      evidence=[evidence],
+                      facts=_private_entity_facts(registry, entity, evidence) if entity else [])
+
+
+def get_security_holders(cfg: AppConfig, identifier: str, id_type: str = "name", limit: int = 25) -> ToolResult:
+    """Reverse N-PORT lookup: which registered fund reports hold a security
+    issued by this name or CUSIP, and how much they report at the snapshot date."""
+    from er.knowledge.nport_holders import NPORT_SOURCE_URI, find_nport_holders
+
+    qh = _query_hash("get_security_holders", identifier=identifier, id_type=id_type, limit=limit)
+    result = find_nport_holders(cfg, identifier, id_type=id_type, limit=limit)
+    evidence = Evidence(
+        evidence_id=_evidence_id(),
+        source="SEC Form N-PORT holdings (reverse issuer lookup)",
+        source_timestamp=result.get("holders", [{}])[0].get("report_date") if result.get("holders") else None,
+        fact_type="records",
+        criteria=[f"Identifier = {identifier}", f"Identifier type = {id_type}"],
+        record_refs=[h["accession_number"] for h in result.get("holders", [])],
+        fields_used=["registrant_name", "series_name", "issuer_name", "issuer_cusip", "currency_value", "report_date"],
+        result_count=result.get("fund_reports", 0),
+        query_hash=qh,
+        warnings=result.get("warnings", []),
+        source_uri=NPORT_SOURCE_URI,
+    )
+    facts = []
+    if result.get("found"):
+        facts.append(_fact(evidence, subject=f"issuer:{identifier}", predicate="nport.reported_value_usd",
+                           value=result["reported_value_usd"], unit="USD", document_id="nport_holdings.parquet",
+                           locator=f"nport_holders:{qh}", field="reported_value_usd"))
+        facts.append(_fact(evidence, subject=f"issuer:{identifier}", predicate="nport.fund_reports",
+                           value=result["fund_reports"], document_id="nport_holdings.parquet",
+                           locator=f"nport_holders:{qh}", field="fund_reports"))
+        for holder in result.get("holders", []):
+            facts.append(_fact(
+                evidence, subject=holder["accession_number"], predicate="nport.holder_value_usd",
+                value=holder["value_usd"], unit="USD", document_id=holder["accession_number"],
+                locator=f"nport_holdings.parquet:accession={holder['accession_number']}",
+                field="currency_value", as_of=holder.get("report_date"),
+            ))
+    return ToolResult(data=result, evidence=[evidence], facts=facts)
+
+
+def search_filings(cfg: AppConfig, query: str, cik: str | None = None, forms: list[str] | None = None,
+                   limit: int = 5, client=None) -> ToolResult:
+    """Search SEC EDGAR full-text for a phrase and return cited filing passages."""
+    from er.knowledge.sec_filings import search_filings as _search_filings
+
+    qh = _query_hash("search_filings", query=query, cik=cik, forms=forms, limit=limit)
+    result = _search_filings(cfg, query, cik=cik, forms=forms, limit=limit, client=client)
+    evidence = Evidence(
+        evidence_id=_evidence_id(),
+        source="SEC EDGAR full-text search + filing text",
+        source_timestamp=result.get("hits", [{}])[0].get("filing_date") if result.get("hits") else None,
+        fact_type="records",
+        criteria=[f'Query = "{query}"'] + ([f"CIK = {cik}"] if cik else []) + ([f"Forms = {forms}"] if forms else []),
+        record_refs=[h["accession_number"] for h in result.get("hits", []) if h.get("accession_number")],
+        fields_used=["form", "filing_date", "cik", "accession_number", "passage"],
+        result_count=result.get("result_count", 0),
+        query_hash=qh,
+        warnings=result.get("warnings", []),
+        source_uri=result.get("source_uri"),
+    )
+    facts = []
+    for hit in result.get("hits", []):
+        document_id = hit.get("accession_number") or hit.get("url") or qh
+        locator = f"edgar:{document_id}:chars={hit.get('char_start')}-{hit.get('char_end')}"
+        for field in ("form", "filing_date", "cik", "url"):
+            if hit.get(field):
+                facts.append(_fact(evidence, subject=document_id, predicate=f"filing.{field}", value=hit[field],
+                                   document_id=document_id, locator=locator, field=field,
+                                   as_of=hit.get("filing_date")))
+    return ToolResult(data=result, evidence=[evidence], facts=facts)
 
 
 def get_entity_profile_tool(store: Store, entity_id: str) -> ToolResult:
@@ -1252,3 +1443,455 @@ def _issuer_summary(issuer: dict) -> dict:
 def _latest_fact(facts: list[Fact], predicate: str) -> Fact | None:
     matches = [fact for fact in facts if fact.predicate == predicate]
     return matches[-1] if matches else None
+
+
+ADV_CAVEAT = (
+    "Regulatory AUM (Form ADV Item 5.F) is gross: it counts leverage, uncalled commitments and "
+    "non-fee-paying assets, so it is usually larger than the AUM a manager reports to clients."
+)
+FORM_D_CAVEAT = (
+    "Form D is a notice of an exempt offering. Amounts sold are cumulative and self-reported, an "
+    "amendment (D/A) restates the running total, and a filing is not evidence the offering closed."
+)
+SHORT_VOLUME_CAVEAT = (
+    "FINRA daily short sale volume counts trades marked short on FINRA-reported venues that day. It is "
+    "not short interest (the open short position), and market-maker hedging puts much of normal "
+    "volume in it."
+)
+FTD_CAVEAT = (
+    "SEC fails-to-deliver figures are outstanding CNS fail balances on each settlement date, not new "
+    "fails, so consecutive days must not be added together."
+)
+ADV_FIELDS = (
+    ("raum", "5F(2)(c)", "USD"),
+    ("raum_discretionary", "5F(2)(a)", "USD"),
+    ("raum_non_us", "5F(3)", "USD"),
+    ("accounts", "5F(2)(f)", None),
+    ("employees", "5A", None),
+    ("advisory_employees", "5B(1)", None),
+    ("private_fund_count", "Count of Private Funds - 7B(1)", None),
+    ("private_fund_gross_assets", "Total Gross Assets of Private Funds", "USD"),
+    ("lei", "1P", None),
+    ("cik", "CIK#", None),
+    ("sec_number", "SEC#", None),
+    ("latest_filing_date", "Latest ADV Filing Date", None),
+)
+
+
+def get_adviser_profile(store: Store, identifier: str, id_type: str = "crd") -> ToolResult:
+    """An investment adviser's Form ADV Part 1A answers: regulatory AUM,
+    accounts, employees, private funds, client types (Item 5.D), and its
+    regulatory AUM in every monthly snapshot ingested, with the change since
+    the earliest one computed by registered formulas."""
+    qh = _query_hash("get_adviser_profile", identifier=identifier, id_type=id_type)
+    try:
+        firm = resolve_adviser(store, identifier, id_type)
+    except ValueError as exc:
+        return ToolResult(data={"found": False, "identifier": identifier, "reason": str(exc)})
+    if firm is None:
+        return ToolResult(data={"found": False, "identifier": identifier, "id_type": id_type})
+    crd, snapshot = firm["crd_number"], firm["snapshot_date"]
+    uri = f"https://adviserinfo.sec.gov/firm/summary/{crd}"
+    evidence = Evidence(
+        evidence_id=_evidence_id(),
+        source="SEC Form ADV Part 1A (monthly adviser data)",
+        source_timestamp=snapshot,
+        fact_type="lookup",
+        criteria=[f"{id_type} = {identifier}", f"CRD = {crd}", f"Snapshot = {snapshot}"],
+        record_refs=[crd],
+        fields_used=[column for _, column, _ in ADV_FIELDS],
+        result_count=1,
+        query_hash=qh,
+        warnings=[ADV_CAVEAT],
+        source_uri=uri,
+    )
+    facts: list[Fact] = []
+
+    def fact(ev: Evidence, predicate: str, value, column: str, unit: str | None, as_of: str, source_file: str,
+             subject: str = f"crd:{crd}") -> Fact:
+        made = _fact(ev, subject=subject, predicate=predicate, value=value, unit=unit, document_id=source_file,
+                     locator=f"{source_file}:Organization CRD#={crd}:{column}", field=column, as_of=as_of, uri=uri)
+        facts.append(made)
+        return made
+
+    figures = {}
+    for name, column, unit in ADV_FIELDS:
+        if firm.get(name) is not None:
+            figures[f"{name}_fact_id"] = fact(evidence, f"adv.{name}", firm[name], column, unit, snapshot,
+                                              firm["source_file"]).fact_id
+
+    all_evidence = [evidence]
+    clients = []
+    if firm.get("client_types"):
+        client_evidence = Evidence(
+            evidence_id=_evidence_id(), source="SEC Form ADV Item 5.D (clients by type)", source_timestamp=snapshot,
+            fact_type="records", criteria=[f"CRD = {crd}", f"Snapshot = {snapshot}"], record_refs=[crd],
+            fields_used=["5D(x)(1)", "5D(x)(2)", "5D(x)(3)"], result_count=len(firm["client_types"]), query_hash=qh,
+            warnings=["A client type marked 'fewer than five' reports no client count."], source_uri=uri,
+        )
+        all_evidence.append(client_evidence)
+        for client in firm["client_types"]:
+            subject = f"crd:{crd}:client_type={client['client_type']}"
+            row = {"client_type": client["client_type"], "fewer_than_five": client["fewer_than_five"],
+                   "raum": client.get("raum"), "client_count": client.get("client_count")}
+            if client.get("raum") is not None:
+                row["raum_fact_id"] = fact(client_evidence, "adv.client_type_raum", client["raum"], "5D(x)(3)",
+                                           "USD", snapshot, firm["source_file"], subject).fact_id
+            if client.get("client_count") is not None:
+                row["client_count_fact_id"] = fact(client_evidence, "adv.client_type_count", client["client_count"],
+                                                   "5D(x)(1)", None, snapshot, firm["source_file"], subject).fact_id
+            clients.append(row)
+
+    history = [entry for entry in firm.get("history", []) if entry.get("raum") is not None]
+    history_out, changes, derivations = [], [], []
+    if history:
+        history_evidence = Evidence(
+            evidence_id=_evidence_id(), source="SEC Form ADV Part 1A snapshots (regulatory AUM history)",
+            source_timestamp=snapshot, fact_type="records", criteria=[f"CRD = {crd}", "Item 5.F(2)(c) per snapshot"],
+            record_refs=[entry["source_file"] for entry in history], fields_used=["5F(2)(c)"],
+            result_count=len(history), query_hash=qh,
+            warnings=[ADV_CAVEAT, "An adviser updates Item 5.F once a year, so consecutive monthly snapshots often repeat."],
+            source_uri=uri,
+        )
+        all_evidence.append(history_evidence)
+        points = [fact(history_evidence, "adv.raum", entry["raum"], "5F(2)(c)", "USD", entry["snapshot_date"],
+                       entry["source_file"]) for entry in history]
+        history_out = [{"snapshot_date": entry["snapshot_date"], "raum": entry["raum"], "raum_fact_id": point.fact_id}
+                       for entry, point in zip(history, points)]
+        if len(points) >= 2:
+            derivation_evidence = Evidence(
+                evidence_id=_evidence_id(), source="Calculated from Form ADV snapshots", fact_type="derivation",
+                criteria=[f"Change = {FORMULAS['difference'].expression}",
+                          f"% change = {FORMULAS['percent_change'].expression}",
+                          f"From {history[0]['snapshot_date']} to {history[-1]['snapshot_date']}"],
+                record_refs=[history_evidence.evidence_id], fields_used=["5F(2)(c)"], query_hash=qh,
+            )
+            difference = _derive(derivation_evidence, derivations, "difference", [points[-1], points[0]],
+                                 subject=f"crd:{crd}", predicate="adv.raum.change", as_of=history[-1]["snapshot_date"])
+            percent = _derive(derivation_evidence, derivations, "percent_change", [points[-1], points[0]],
+                              subject=f"crd:{crd}", predicate="adv.raum.percent_change",
+                              as_of=history[-1]["snapshot_date"])
+            facts += [item for item in (difference, percent) if item is not None]
+            derivation_evidence.result_count = len(derivations)
+            all_evidence.append(derivation_evidence)
+            changes.append({"from_snapshot": history[0]["snapshot_date"], "to_snapshot": history[-1]["snapshot_date"],
+                            "change_fact_id": difference.fact_id if difference else None,
+                            "percent_change_fact_id": percent.fact_id if percent else None})
+
+    return ToolResult(
+        data={
+            "found": True,
+            "crd_number": crd,
+            "business_name": firm["business_name"],
+            "legal_name": firm.get("legal_name"),
+            "firm_type": firm.get("firm_type"),
+            "city": firm.get("city"),
+            "state": firm.get("state"),
+            "website": firm.get("website"),
+            "snapshot_date": snapshot,
+            "lei_name": firm.get("lei_name"),
+            "thirteen_f_cik": firm.get("thirteen_f_cik"),
+            "fund_types": firm.get("fund_types") or [],
+            **{name: firm.get(name) for name, _, _ in ADV_FIELDS},
+            **figures,
+            "client_types": clients,
+            "raum_history": history_out,
+            "raum_changes": changes,
+        },
+        evidence=all_evidence,
+        facts=facts,
+        derivations=derivations,
+    )
+
+
+def search_private_offerings(
+    store: Store,
+    query: str | None = None,
+    kind: str | None = None,
+    fund_type: str | None = None,
+    industry: str | None = None,
+    state: str | None = None,
+    days: int | None = None,
+    new_only: bool = False,
+    sort: str = "newest",
+    limit: int = 20,
+) -> ToolResult:
+    """Form D private offering notices, newest first or largest first, with amounts sold and
+    offered as facts, and the total sold across the listed original filings
+    computed by the registered sum formula."""
+    limit = min(max(limit, 1), 50)
+    qh = _query_hash("search_private_offerings", query=query, kind=kind, fund_type=fund_type, industry=industry,
+                     state=state, days=days, new_only=new_only, sort=sort, limit=limit)
+    rows, window = search_offerings(store, query, kind=kind, fund_type=fund_type, industry=industry, state=state,
+                                    days=days, new_only=new_only, sort=sort, limit=limit + 1)
+    more = len(rows) > limit
+    rows = rows[:limit]
+    criteria = [f"{name} = {value}" for name, value in (
+        ("Issuer or related person contains", query), ("Kind", kind), ("Fund type", fund_type),
+        ("Industry group", industry), ("State", state)) if value]
+    if window:
+        criteria.append(f"Filed {window['from']} to {window['to']} (the newest filing in the data set is {window['to']})")
+    if new_only:
+        criteria.append("Original filings only (amendments excluded)")
+    criteria.append("Largest amount sold first" if sort == "largest" else "Newest filing first")
+    evidence = Evidence(
+        evidence_id=_evidence_id(), source="SEC Form D data sets", source_timestamp=window.get("to"),
+        fact_type="records", criteria=criteria, record_refs=[row["accession_number"] for row in rows],
+        fields_used=["TOTALAMOUNTSOLD", "TOTALOFFERINGAMOUNT", "MINIMUMINVESTMENTACCEPTED", "FILING_DATE"],
+        result_count=len(rows), query_hash=qh,
+        warnings=[FORM_D_CAVEAT] + ([f"Shows the {'largest' if sort == 'largest' else 'newest'} {limit}; "
+                                     "more filings match."] if more else []),
+    )
+    facts: list[Fact] = []
+    offerings = []
+    sold_facts: list[Fact] = []
+    for row in rows:
+        accession = row["accession_number"]
+        uri = _edgar_filing_url(row["issuer_cik"], accession)
+        item = {key: row.get(key) for key in ("accession_number", "issuer_name", "issuer_cik", "filing_date",
+                                              "submission_type", "is_amendment", "industry_group", "fund_type",
+                                              "state", "offering_indefinite")}
+        for predicate, field, column, unit in (
+            ("form_d.total_sold", "total_sold", "TOTALAMOUNTSOLD", "USD"),
+            ("form_d.total_offering", "total_offering", "TOTALOFFERINGAMOUNT", "USD"),
+            ("form_d.minimum_investment", "minimum_investment", "MINIMUMINVESTMENTACCEPTED", "USD"),
+            ("form_d.investor_count", "investor_count", "TOTALNUMBERALREADYINVESTED", None),
+            ("form_d.filing_date", "filing_date", "FILING_DATE", None),
+        ):
+            if row.get(field) is None:
+                continue
+            made = _fact(evidence, subject=f"cik:{row['issuer_cik']}", predicate=predicate, value=row[field],
+                         unit=unit, document_id=accession, locator=f"OFFERING.tsv:ACCESSIONNUMBER={accession}:{column}",
+                         field=column, as_of=row.get("filing_date"), uri=uri)
+            facts.append(made)
+            item[field] = row[field]
+            item[f"{field}_fact_id"] = made.fact_id
+            if field == "total_sold" and not row.get("is_amendment"):
+                sold_facts.append(made)
+        offerings.append(item)
+
+    derivations: list[Derivation] = []
+    all_evidence = [evidence]
+    total = None
+    if len(sold_facts) >= 2:
+        derivation_evidence = Evidence(
+            evidence_id=_evidence_id(), source="Calculated from Form D amounts sold", fact_type="derivation",
+            criteria=[f"Total = sum of TOTALAMOUNTSOLD over the {len(sold_facts)} listed original filings "
+                      "(amendments left out so an offering is not counted twice)"],
+            record_refs=[evidence.evidence_id], fields_used=["TOTALAMOUNTSOLD"], query_hash=qh,
+            warnings=[FORM_D_CAVEAT] + (["Only the listed filings are summed, not every match."] if more else []),
+        )
+        total = _derive(derivation_evidence, derivations, "sum", sold_facts, subject="form_d:search",
+                        predicate="form_d.total_sold_sum", as_of=window.get("to") or rows[0].get("filing_date"))
+        if total is not None:
+            facts.append(total)
+            derivation_evidence.result_count = 1
+            all_evidence.append(derivation_evidence)
+    return ToolResult(
+        data={"found": bool(rows), "window": window, "more": more, "offerings": offerings,
+              "total_sold_fact_id": total.fact_id if total else None},
+        evidence=all_evidence,
+        facts=facts,
+        derivations=derivations,
+    )
+
+
+def get_security_ownership(store: Store, identifier: str, limit: int = 15) -> ToolResult:
+    """Who reports holding a security on 13F: per report period, the number of
+    filers and their total reported value and shares; and the largest holders
+    in the latest period with their share change since the previous one,
+    computed by registered formulas. Long positions only."""
+    limit = min(max(limit, 1), 50)
+    qh = _query_hash("get_security_ownership", identifier=identifier, limit=limit)
+    resolved = resolve_security(store, identifier)
+    doc = load_ownership(store, resolved["cusip"], limit=limit) if resolved and resolved["cusip"] else None
+    if doc is None:
+        return ToolResult(data={"found": False, "identifier": identifier})
+    cusip = doc["cusip"]
+    locator = f"sec_13f_effective_holdings.parquet:cusip={cusip}:put_call=NULL"
+    period_evidence = Evidence(
+        evidence_id=_evidence_id(), source="SEC 13F information tables, by CUSIP", source_timestamp=doc["latest_period"],
+        fact_type="records",
+        criteria=[f"CUSIP = {cusip}", "Long positions only - put/call rows excluded",
+                  "Per period: count of filers, sum of their reported value and shares"],
+        record_refs=[period["period_of_report"] for period in doc["periods"]],
+        fields_used=["value_usd", "shares_or_principal_amount"], result_count=doc["holder_count"], query_hash=qh,
+        warnings=[THIRTEEN_F_CAVEAT],
+    )
+    facts: list[Fact] = []
+
+    def fact(ev: Evidence, subject: str, predicate: str, value, unit: str | None, as_of: str, where: str,
+             field: str, document_id: str) -> Fact:
+        made = _fact(ev, subject=subject, predicate=predicate, value=value, unit=unit, document_id=document_id,
+                     locator=f"{locator}:{where}", field=field, as_of=as_of)
+        facts.append(made)
+        return made
+
+    periods = []
+    totals = []
+    for period in doc["periods"]:
+        name = period["period_of_report"]
+        count = fact(period_evidence, f"cusip:{cusip}", "ownership.holder_count", period["holder_count"], None, name,
+                     f"period={name}:count(cik)", "cik", cusip)
+        value = fact(period_evidence, f"cusip:{cusip}", "ownership.reported_value_total", period["value_usd"], "USD",
+                     name, f"period={name}:sum(value_usd)", "value_usd", cusip)
+        row = {"period_of_report": name, "holder_count": period["holder_count"], "value_usd": period["value_usd"],
+               "shares": period.get("shares"), "holder_count_fact_id": count.fact_id, "value_fact_id": value.fact_id}
+        if period.get("shares") is not None:
+            row["shares_fact_id"] = fact(period_evidence, f"cusip:{cusip}", "ownership.shares_total", period["shares"],
+                                         "shares", name, f"period={name}:sum(shares)", "shares_or_principal_amount",
+                                         cusip).fact_id
+        totals.append(value)
+        periods.append(row)
+
+    holder_evidence = Evidence(
+        evidence_id=_evidence_id(), source="SEC 13F information tables (largest holders)",
+        source_timestamp=doc["latest_period"], fact_type="records",
+        criteria=[f"CUSIP = {cusip}", f"Period = {doc['latest_period']}", f"Largest {limit} by reported value",
+                  f"Previous period = {doc.get('previous_period')}"],
+        record_refs=[holder["accession_number"] for holder in doc["holders"]], fields_used=["value_usd", "shares"],
+        result_count=doc["holder_count"], query_hash=qh, warnings=[THIRTEEN_F_CAVEAT],
+    )
+    derivation_evidence = Evidence(
+        evidence_id=_evidence_id(), source="Calculated from 13F information-table rows", fact_type="derivation",
+        criteria=[f"Change = {FORMULAS['difference'].expression}",
+                  f"% change = {FORMULAS['percent_change'].expression}"],
+        record_refs=[period_evidence.evidence_id, holder_evidence.evidence_id], fields_used=["value_usd", "shares"],
+        query_hash=qh, warnings=[THIRTEEN_F_CAVEAT],
+    )
+    derivations: list[Derivation] = []
+    total_change = None
+    if len(totals) >= 2:
+        total_change = _derive(derivation_evidence, derivations, "percent_change", [totals[-1], totals[-2]],
+                               subject=f"cusip:{cusip}", predicate="ownership.reported_value_total.percent_change",
+                               as_of=doc["latest_period"])
+        if total_change is not None:
+            facts.append(total_change)
+
+    holders = []
+    for holder in doc["holders"]:
+        subject = f"cik:{holder['cik']}"
+        where = f"cik={holder['cik']}"
+        row = {"filer_name": holder.get("filer_name"), "cik": holder["cik"], "lei": holder.get("lei"),
+               "new_position": holder.get("new", False), "value_usd": holder.get("value_usd"),
+               "shares": holder.get("shares"), "previous_shares": holder.get("previous_shares"),
+               "shares_change": holder.get("change"), "shares_percent_change": holder.get("percent_change")}
+        if holder.get("value_usd") is not None:
+            row["value_fact_id"] = fact(holder_evidence, subject, "holding.reported_value", holder["value_usd"], "USD",
+                                        doc["latest_period"], f"{where}:period={doc['latest_period']}", "value_usd",
+                                        holder["accession_number"]).fact_id
+        current = previous = None
+        if holder.get("shares") is not None:
+            current = fact(holder_evidence, subject, "holding.shares", holder["shares"], "shares", doc["latest_period"],
+                           f"{where}:period={doc['latest_period']}", "shares_or_principal_amount",
+                           holder["accession_number"])
+            row["shares_fact_id"] = current.fact_id
+        if holder.get("previous_shares") is not None and doc.get("previous_period"):
+            previous = fact(holder_evidence, subject, "holding.shares", holder["previous_shares"], "shares",
+                            doc["previous_period"], f"{where}:period={doc['previous_period']}",
+                            "shares_or_principal_amount", holder["previous_accession_number"])
+            row["previous_shares_fact_id"] = previous.fact_id
+        if current and previous:
+            change = _derive(derivation_evidence, derivations, "difference", [current, previous], subject=subject,
+                             predicate=f"holding.shares.change:{cusip}", as_of=doc["latest_period"])
+            percent = _derive(derivation_evidence, derivations, "percent_change", [current, previous], subject=subject,
+                              predicate=f"holding.shares.percent_change:{cusip}", as_of=doc["latest_period"])
+            facts += [item for item in (change, percent) if item is not None]
+            row["shares_change_fact_id"] = change.fact_id if change else None
+            row["shares_percent_change_fact_id"] = percent.fact_id if percent else None
+        holders.append(row)
+    derivation_evidence.result_count = len(derivations)
+    return ToolResult(
+        data={
+            "found": True,
+            "cusip": cusip,
+            "issuer_name": doc.get("issuer_name"),
+            "title_of_class": doc.get("title_of_class"),
+            "tickers": doc.get("tickers") or [],
+            "latest_period": doc["latest_period"],
+            "previous_period": doc.get("previous_period"),
+            "periods": periods,
+            "reported_value_percent_change_fact_id": total_change.fact_id if total_change else None,
+            "holders": holders,
+        },
+        evidence=[period_evidence, holder_evidence] + ([derivation_evidence] if derivations else []),
+        facts=facts,
+        derivations=derivations,
+    )
+
+
+def get_short_activity(store: Store, identifier: str, days: int = 20) -> ToolResult:
+    """A security's FINRA daily short sale volume and the short share of each
+    day's volume (registered percent_of formula), plus its SEC fails-to-deliver
+    balances. Found by ticker or CUSIP."""
+    days = min(max(days, 5), 60)
+    qh = _query_hash("get_short_activity", identifier=identifier, days=days)
+    resolved = resolve_security(store, identifier)
+    if resolved is None:
+        return ToolResult(data={"found": False, "identifier": identifier})
+    symbol, cusip = resolved["symbol"], resolved["cusip"]
+    evidence: list[Evidence] = []
+    facts: list[Fact] = []
+    derivations: list[Derivation] = []
+    volume_rows = load_short_volume(store, symbol, days=days) if symbol else []
+    daily = []
+    if volume_rows:
+        volume_evidence = Evidence(
+            evidence_id=_evidence_id(), source="FINRA Reg SHO daily short sale volume",
+            source_timestamp=volume_rows[-1]["trade_date"], fact_type="records",
+            criteria=[f"Symbol = {symbol}", f"Last {len(volume_rows)} trading days in the data"],
+            record_refs=[row["source_file"] for row in volume_rows], fields_used=["ShortVolume", "TotalVolume"],
+            result_count=len(volume_rows), query_hash=qh, warnings=[SHORT_VOLUME_CAVEAT],
+            source_uri="https://www.finra.org/finra-data/browse-catalog/short-sale-volume-data/daily-short-sale-volume-files",
+        )
+        ratio_evidence = Evidence(
+            evidence_id=_evidence_id(), source="Calculated from FINRA short sale volume", fact_type="derivation",
+            criteria=[f"Short share of volume = {FORMULAS['percent_of'].expression}"],
+            record_refs=[volume_evidence.evidence_id], fields_used=["ShortVolume", "TotalVolume"], query_hash=qh,
+            warnings=[SHORT_VOLUME_CAVEAT],
+        )
+        evidence += [volume_evidence, ratio_evidence]
+        for row in volume_rows:
+            made = {}
+            for field, column in (("short_volume", "ShortVolume"), ("total_volume", "TotalVolume")):
+                made[field] = _fact(volume_evidence, subject=f"symbol:{symbol}", predicate=f"short_volume.{field}",
+                                    value=row[field], unit="shares", document_id=row["source_file"],
+                                    locator=f"{row['source_file']}:Symbol={symbol}:{column}", field=column,
+                                    as_of=row["trade_date"])
+                facts.append(made[field])
+            ratio = _derive(ratio_evidence, derivations, "percent_of", [made["short_volume"], made["total_volume"]],
+                            subject=f"symbol:{symbol}", predicate="short_volume.share_of_volume", as_of=row["trade_date"])
+            if ratio is not None:
+                facts.append(ratio)
+            daily.append({"trade_date": row["trade_date"], "short_volume": row["short_volume"],
+                          "total_volume": row["total_volume"], "short_share_percent": row.get("short_ratio"),
+                          "short_volume_fact_id": made["short_volume"].fact_id,
+                          "total_volume_fact_id": made["total_volume"].fact_id,
+                          "short_share_fact_id": ratio.fact_id if ratio else None})
+        ratio_evidence.result_count = len(derivations)
+    fails = load_fails(store, cusip, limit=days) if cusip else None
+    fails_out = []
+    if fails and fails.get("fails"):
+        fails_evidence = Evidence(
+            evidence_id=_evidence_id(), source="SEC fails-to-deliver data", source_timestamp=fails["fails"][-1]["settlement_date"],
+            fact_type="records", criteria=[f"CUSIP = {cusip}", f"Last {len(fails['fails'])} settlement dates with a fail"],
+            record_refs=sorted({row["source_file"] for row in fails["fails"]}), fields_used=["QUANTITY (FAILS)", "PRICE"],
+            result_count=len(fails["fails"]), query_hash=qh, warnings=[FTD_CAVEAT],
+            source_uri="https://www.sec.gov/data-research/sec-markets-data/fails-deliver-data",
+        )
+        evidence.append(fails_evidence)
+        for row in fails["fails"]:
+            locator = f"{row['source_file']}:CUSIP={cusip}:SETTLEMENT DATE={row['settlement_date']}"
+            quantity = _fact(fails_evidence, subject=f"cusip:{cusip}", predicate="fails.quantity", value=row["quantity"],
+                             unit="shares", document_id=row["source_file"], locator=f"{locator}:QUANTITY (FAILS)",
+                             field="QUANTITY (FAILS)", as_of=row["settlement_date"])
+            facts.append(quantity)
+            fails_out.append({"settlement_date": row["settlement_date"], "quantity": row["quantity"],
+                              "quantity_fact_id": quantity.fact_id})
+    return ToolResult(
+        data={"found": bool(daily or fails_out), "symbol": symbol, "cusip": cusip,
+              "description": (fails or {}).get("description"), "short_volume": daily, "fails": fails_out},
+        evidence=evidence,
+        facts=facts,
+        derivations=derivations,
+    )

@@ -7,9 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "openui:prompt": "node scripts/openui-prompt.mjs",
+    "openui:check": "node scripts/openui-prompt.mjs --check"
   },
   "dependencies": {
+    "@openuidev/react-headless": "^0.18.1",
+    "@openuidev/react-lang": "^1.0.1",
+    "@openuidev/react-ui": "^0.18.1",
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",
     "cn": "^0.4.0",
@@ -20,7 +25,10 @@
     "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.14.4",
-    "remark-gfm": "^4.0.1"
+    "recharts": "^3.8.0",
+    "remark-gfm": "^4.0.1",
+    "zod": "^4.6.7",
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
@@ -33,5 +41,13 @@
     "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "@openuidev/react-headless": {
+      "zustand": "$zustand"
+    },
+    "@openuidev/react-ui": {
+      "zustand": "$zustand"
+    }
   }
 }

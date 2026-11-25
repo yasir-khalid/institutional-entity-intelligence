@@ -144,7 +144,7 @@ behind aliases, and it's all the runtime reads. Drop OpenSearch, run
 
 ```bash
 brew install libpostal
-CFLAGS="-I/opt/homebrew/include" LDFLAGS="-L/opt/homebrew/lib" uv sync
+CFLAGS="-I/opt/homebrew/include" LDFLAGS="-L/opt/homebrew/lib" uv sync --extra ingest
 cp .env.example .env   # OPENSEARCH_URL, plus OPENROUTER_API_KEY for the agent
 
 make pipeline          # GLEIF + 13F ingest, index, validate, benchmark
@@ -155,7 +155,19 @@ make publish           # stage all serving indexes, validate, atomically publish
 # fetches the issuers named in the 13D/G and Forms 3/4/5 tables already processed
 make ingest-sec-xbrl
 uv run python -m er.cli.publish --only xbrl_facts --only xbrl_issuers
+
+# Advisers, private raises and market activity (each downloads its own files)
+make ingest-sec-adv-firms       # Form ADV Part 1A monthly files: regulatory AUM history, clients, private funds
+make ingest-sec-form-d          # Form D quarterly data sets: fund and company raises, related persons
+make ingest-finra-short-volume  # FINRA daily short sale volume (last 45 days)
+make ingest-sec-ftd             # SEC fails-to-deliver
+uv run python -m er.cli.publish --only adv_firms --only form_d_offerings \
+  --only security_ownership --only short_volume --only fails_to_deliver
 ```
+
+`make ingest-sec-13f` and `make ingest-sec-insiders` now ingest every quarter
+listed in `config/dev.yaml` (four 13F report periods by default), which is what
+the holder-change views and `get_security_ownership` compare.
 
 Then:
 
@@ -177,7 +189,13 @@ make evaluate-agent      # agent answers vs. config/agent_eval_cases.yaml
 ```
 
 The workspace has saved investigations, shareable entity dossiers, a match-review
-queue and a measured coverage inventory. Existing deployments need one full
+queue and a measured coverage inventory, plus explore views: `/advisers` (Form ADV,
+ranked by regulatory AUM), `/raises` (Form D fund and company raises),
+`/securities` (13F holders with quarter-on-quarter changes, short sale volume,
+fails-to-deliver) and `/explore?q=` across all three. Research answers can carry
+one generative-UI chart or table (OpenUI Lang) whose values pass the same
+fact-placeholder gate as the prose; after editing `web/src/lib/openui/spec.json`,
+run `cd web && npm run openui:prompt` to regenerate `config/openui/system-prompt.md`. Existing deployments need one full
 `make publish` to populate the new decision/coverage indexes. Source data stays
 in Parquet; reviews and saved research are runtime-authored exceptions and need
 backups before removing OpenSearch. Keep the unauthenticated API localhost-only.
@@ -191,7 +209,12 @@ cd web && npx playwright install chromium && npm run test:e2e  # isolated API/mo
 ```
 
 See [workspace operations](docs/workspace.md) for leases, recovery, publication
-retention and verification boundaries.
+retention and verification boundaries. The demo OpenSearch cluster is capped at
+20 shards, so `config/dev.yaml` packs the small serving indexes into one and
+prunes superseded generations - see [fitting a small cluster](docs/running.md#fitting-a-small-cluster).
+Everything the API serves, Form ADV brochure PDFs included, comes from OpenSearch,
+so a deployed API and web app need only `OPENSEARCH_URL` (and `OPENROUTER_API_KEY` for
+the agent's model and its Jev verifier); `data/` is needed only on the machine that ingests and publishes.
 
 ## More
 

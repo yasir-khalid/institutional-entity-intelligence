@@ -11,8 +11,10 @@ passes through the existing MCP orchestrator, fact submission gate and verifier.
 the questions, answers, citations, facts, derivations and bounded progress events.
 Closing the browser does not cancel a run. The sidebar remembers its collapsed
 state in a cookie; entity-search split sizes are an optional local preference.
-The command palette (Cmd/Ctrl-K) navigates pages, finds recent investigations,
-and hands entity names to the normal backend search.
+The command palette (Cmd/Ctrl-K) navigates pages and hands entity names to the
+normal backend search. There is no list of investigations: the site is public,
+so nobody can browse other people's questions, and a run is reachable only by
+its link.
 
 `/entities?q=...&type=name|lei|cusip&country=GB` records the search in the URL.
 `/entities/{LEI}?tab=overview|relationships|holdings|resolution` is shareable;
@@ -131,7 +133,7 @@ Python checks cover leases, interruption recovery, idempotency, backups, the
 real API/worker lifecycle, publication failure/rollback, coverage dates and
 immutable review evidence. Browser checks run real Next/FastAPI routes with a
 MemoryStore and substituted MCP/provider boundary, on desktop and mobile:
-saved research, reload/follow-up/rename, stop/retry, shared tabs, review writes,
+saved research, reload/follow-up, stop/retry, shared tabs, review writes,
 coverage, command palette and mobile sidebar. They include axe accessibility
 checks and horizontal-overflow checks, and never query live OpenSearch or a
 paid model. The browser harness uses ports 3100 and 8100 and refuses occupied

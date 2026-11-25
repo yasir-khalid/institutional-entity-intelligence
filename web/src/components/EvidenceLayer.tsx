@@ -199,6 +199,12 @@ function TechnicalProvenance({ evidence }: { evidence: Evidence }) {
   );
 }
 
+/** Tool names arrive with their Python module in parentheses, which is useful
+ * in the developer trace and noise in the reader's source rail. */
+function displaySource(source: string): string {
+  return source.replace(/\s*\([^)]*\)\s*$/, "");
+}
+
 function EvidenceCard({
   evidence,
   highlighted,
@@ -218,7 +224,7 @@ function EvidenceCard({
       <header className="evidence-receipt-head">
         <span className="evidence-receipt-icon"><Database /></span>
         <div>
-          <h3>{evidence.source}</h3>
+          <h3 title={evidence.source}>{displaySource(evidence.source)}</h3>
           <Badge variant={presentation.variant} className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
             {presentation.label}
           </Badge>
@@ -277,7 +283,7 @@ function CompactEvidenceCard({
     <section id={`evidence-${evidence.evidence_id}`} className={`source-card ${highlighted ? "is-focused" : ""}`}>
       <div className="source-card-head">
         <CoverageDot partial={evidence.warnings.length > 0} />
-        <h3>{evidence.source}</h3>
+        <h3 title={evidence.source}>{displaySource(evidence.source)}</h3>
       </div>
       <SupportedClaims claims={claims} limit={1} />
       {evidence.criteria.length > 0 && <p className="source-card-criteria">{evidence.criteria.join(" · ")}</p>}

@@ -17,13 +17,20 @@ const badgeVariants = cva(
           "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
-        neutral: "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-300/70",
-        accent: "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-300/70",
-        positive: "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-300/70",
-        caution: "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-300/70",
-        critical: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-300/70",
-        upward: "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-300/70",
-        downward: "bg-violet-50 text-violet-800 ring-1 ring-inset ring-violet-300/70",
+        neutral:
+          "bg-secondary text-secondary-foreground ring-1 ring-inset ring-border",
+        accent:
+          "bg-secondary text-secondary-foreground ring-1 ring-inset ring-border",
+        positive:
+          "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+        caution:
+          "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
+        critical:
+          "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
+        upward:
+          "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+        downward:
+          "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
       },
     },
     defaultVariants: {

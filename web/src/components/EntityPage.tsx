@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Link as LinkIcon, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -14,13 +13,20 @@ import {
   type Investigation,
 } from "@/lib/api";
 import EntityProfile from "@/components/EntityProfile";
+import { PageHeader } from "@/components/PageHeader";
 import EntityTreeView from "@/components/EntityTreeView";
 import { LoadError, Loading } from "@/components/WorkspaceStates";
 
 const tabs = ["overview", "relationships", "holdings", "resolution"] as const;
-export default function EntityPage({ id }: { id: string }) {
+export default function EntityPage({
+  id,
+  searchParams,
+}: {
+  id: string;
+  searchParams: Record<string, string>;
+}) {
   const router = useRouter();
-  const params = useSearchParams();
+  const params = new URLSearchParams(searchParams);
   const tab = tabs.find((value) => value === params.get("tab")) ?? "overview";
   const detail = useResource<EntityDetail>(
     `/api/entity/${encodeURIComponent(id)}`,
@@ -56,37 +62,37 @@ export default function EntityPage({ id }: { id: string }) {
   }
   return (
     <div className="workspace-page entity-page">
-      <Link className="workspace-text-link" href="/entities">
-        ← Entity search
-      </Link>
-      <div className="workspace-heading compact">
-        <p>Entity dossier</p>
-        <h1>{detail.data?.canonical_name || "Entity profile"}</h1>
-        <span className="break-all">{id}</span>
-      </div>
-      <div className="workspace-actions">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(window.location.href);
-              setNotice("Link copied.");
-            } catch {
-              setNotice(
-                "Copy the address from your browser to share this view.",
-              );
-            }
-          }}
-        >
-          <LinkIcon />
-          Copy view link
-        </Button>
-        <Button size="sm" disabled={busy || !detail.data} onClick={investigate}>
-          <MessageSquare />
-          Investigate this entity
-        </Button>
-      </div>
+      <PageHeader
+        back={{ href: "/entities", label: "Entity search" }}
+        eyebrow="Entity dossier"
+        title={detail.data?.canonical_name || "Entity profile"}
+        description={<span className="break-all">{id}</span>}
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(window.location.href);
+                  setNotice("Link copied.");
+                } catch {
+                  setNotice(
+                    "Copy the address from your browser to share this view.",
+                  );
+                }
+              }}
+            >
+              <LinkIcon />
+              Copy view link
+            </Button>
+            <Button size="sm" disabled={busy || !detail.data} onClick={investigate}>
+              <MessageSquare />
+              Investigate this entity
+            </Button>
+          </>
+        }
+      />
       <p role="status" className="workspace-note">
         {notice}
       </p>
@@ -120,6 +126,7 @@ export default function EntityPage({ id }: { id: string }) {
                 detail={detail.data!}
                 loading={false}
                 view={value}
+                showName={false}
                 onOpenEntity={open}
               />
               {value === "relationships" && (

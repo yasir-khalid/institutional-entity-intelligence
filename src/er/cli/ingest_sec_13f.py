@@ -1,6 +1,6 @@
 """CLI: python -m er.cli.ingest_sec_13f (or `make ingest-sec-13f`)
 
-Parses the latest downloaded SEC Form 13F bulk zip into data/processed/*.parquet.
+Parses every downloaded SEC Form 13F bulk zip into data/processed/*.parquet.
 All parsing logic lives in er.datasources.sec_13f.ingest.run_all() - this module
 only sets up logging and prints the final summary.
 """

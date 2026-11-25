@@ -16,7 +16,7 @@ Once, or after refreshing raw source files:
 make pipeline        # ingest the core GLEIF + 13F sources, then index/validate/benchmark
 # or step by step:
 make ingest-gleif     # GLEIF XML/CSV -> data/processed/*.parquet (~10-15 min)
-make ingest-sec-13f   # SEC 13F bulk TSVs -> data/processed/*.parquet (~1 min)
+make ingest-sec-13f   # every 13F window in config/dev.yaml -> one set of tables (~3 min for four)
 make ingest-sec-series-class
 make ingest-sec-submissions   # downloads SEC's submissions.zip itself (~1.5 GB, ~6 min)
 make ingest-sec-insiders
@@ -27,6 +27,10 @@ make ingest-openfigi          # maps 13F CUSIPs; ~3 h without OPENFIGI_API_KEY, 
 make ingest-sec-13dg          # structured Schedule 13D/G from EDGAR (~40 min a quarter;
                               # --quarter 2026Q1 / --limit N via python -m er.cli.ingest_sec_13dg)
 make ingest-ffiec-nic         # expects the NIC CSV zips in data/raw/ffiec_nic (FFIEC blocks scripted downloads)
+make ingest-sec-adv-firms     # Form ADV Part 1A monthly extracts listed in config/dev.yaml (~15 MB each)
+make ingest-sec-form-d        # Form D quarterly data sets listed in config/dev.yaml
+make ingest-finra-short-volume  # FINRA Reg SHO daily files for the last lookback_days
+make ingest-sec-ftd           # SEC fails-to-deliver half-month files listed in config/dev.yaml
 make build-knowledge-graph    # typed legal-entity/fund/class/security/owner graph
 make index            # entities -> OpenSearch (~20 min)
 make validate         # sanity-check the processed tables
@@ -53,15 +57,64 @@ an alias and is swapped in only when fully loaded.
 | `er_13dg_ownership` | 13D/G reporting person per filing | beneficial owners |
 | `er_nport_funds` | fund series LEI: latest N-PORT report, net assets, top 10 holdings by USD value | fund profiles, agent facts |
 | `er_sec_adv_pages` | extracted Form ADV PDF page | brochure full-text search |
-| `er_sec_adv_documents` | Form ADV PDF metadata + local archive member | resolve a locally mounted PDF |
+| `er_sec_adv_pdfs` | one brochure PDF (base64) | the brochure viewer |
+| `er_sec_adv_documents` | Form ADV PDF metadata + source archive member | brochure provenance |
 | `er_match_reviews` | human review, written by the API | reviews (`make pull-reviews` copies them back for `build-knowledge-graph`) |
+| `er_adv_firms` | adviser (CRD): latest Form ADV Part 1A, AUM history, client types | adviser pages, `get_adviser_profile` |
+| `er_form_d_offerings` | Form D filing, with related persons and recipients | raises feed, `search_private_offerings` |
+| `er_security_ownership` | CUSIP: 13F holders per period, largest holders with prior-period shares | security pages, `get_security_ownership` |
+| `er_short_volume` / `er_fails_to_deliver` | symbol / CUSIP: daily series | security pages, `get_short_activity` |
 
-So a deployed API needs `OPENSEARCH_URL` (and `OPENROUTER_API_KEY` for the
-agent), not the Parquet files. Rebuild order after new data: ingest →
+### Fitting a small cluster
+
+The hosted demo cluster (Aiven free tier) allows 20 shards and 5 are Aiven's
+own. Replicas are already 0 everywhere, so the shard count is the limit, not
+disk (everything is about 3.5 GB). `config/dev.yaml` therefore:
+
+- packs the small read indexes listed under `serving.packed` into one physical
+  index, `er_packed`. Each document keeps its id behind a `<name>:` prefix and a
+  `serving_kind` field; `er.serving.store.OpenSearchStore` adds the filter, so
+  no reader changes. Serving then takes 4 shards: `er_entities`,
+  `er_13f_holdings`, `er_packed` and `er_coverage`.
+- sets `serving.keep_previous_generation: false`, so a publish deletes the
+  generation it replaced instead of retaining it for `--rollback`.
+- builds `gleif_entities_v1` with one shard (`make index` after deleting it).
+  Over a slow link the load takes about 12 minutes; if the connection drops,
+  run it again - documents are keyed by LEI, so it overwrites, never duplicates.
+
+That is 7 shards live (with `er_investigations` and `er_match_reviews`) and
+11 while a publish stages its replacement. On a cluster without the limit,
+empty `serving.packed` and set `keep_previous_generation: true` to get one
+index per read and rollback back. Switching layout is a normal publish: the
+old per-index aliases are dropped in the same alias transaction.
+
+So a deployed API needs `OPENSEARCH_URL` (and `OPENROUTER_API_KEY` for
+the agent and its Jev verifier), not the Parquet files or `data/raw`. Rebuild order after new data: ingest →
 crosswalk → `make pull-reviews` → `make build-entities` →
-`make build-knowledge-graph` → `make publish`. Form ADV search reads its page
-content and metadata from OpenSearch; PDF bytes remain in the local source ZIPs,
-so only the PDF-delivery endpoint needs that filesystem mount.
+`make build-knowledge-graph` → `make publish`. Form ADV brochures are served
+from OpenSearch too: publish copies each PDF out of its SEC monthly ZIP into
+`er_sec_adv_pdfs`, so only the machine that publishes needs the ZIPs.
+
+### Vercel
+
+Two Vercel projects, both deployed with the CLI:
+
+- **API** (`finance-api`, repo root): `vercel.json` sets the FastAPI preset
+  and `app.py` is the entrypoint. `.vercelignore` keeps `data/`, `web/` and
+  tests out of the bundle; libpostal is an ingest-only extra, so the build
+  never needs the native library. Environment: `OPENSEARCH_URL`,
+  `OPENROUTER_API_KEY`, `CORS_ORIGINS` (fixed web origins,
+  comma-separated, e.g. the custom domain), `CORS_ORIGIN_REGEX` (origins that
+  change per deploy - set to any `*.vercel.app`), `A2A_PUBLIC_URL`,
+  `A2A_API_KEY`. Deploy with
+  `vercel deploy --prod` from the repo root.
+- **Web** (`finance`, `web/`): `NEXT_PUBLIC_API_URL` points at the API and is
+  baked in at build time. Deploy with `vercel deploy --prod` from `web/`.
+
+The MCP server runs as a subprocess of the API function, and the research
+worker runs inside it while requests keep the instance alive - a page polling
+an investigation does that. A run whose instance is frozen mid-way is picked
+up again when its lease expires. Runs are capped at the function's 300s.
 
 ## Day-to-day usage
 
@@ -87,7 +140,7 @@ make crosswalk-sec-13f
 make build-entities
 
 # Ask the agent; every number in the answer is a cited, re-checked fact
-# (see agent.md). Requires OPENROUTER_API_KEY in .env.
+# (see agent.md). Requires OPENROUTER_API_KEY (model and Jev) in .env.
 uv run python -m er.cli.ask --entity-id 254900ESP1ZKG7UNS007 --question "What is its registration status?"
 ```
 
@@ -123,6 +176,12 @@ exact values it supplied and where they came from. See
 make api                 # FastAPI backend on :8000
 cd web && npm run dev    # Next.js dev server
 ```
+
+The explore pages read the serving indexes `adv_firms`, `form_d_offerings`,
+`security_ownership`, `short_volume` and `fails_to_deliver` through
+`/api/explore`, `/api/advisers`, `/api/offerings` and `/api/securities`; the
+agent reaches the same data through `get_adviser_profile`,
+`search_private_offerings`, `get_security_ownership` and `get_short_activity`.
 
 Run `make help` for the full target list. All CLIs support `--country` (ISO
 alpha-2 or a common alias like `UK`/`Cayman Islands`) and `--country-mode

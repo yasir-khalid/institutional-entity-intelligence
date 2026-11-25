@@ -1,4 +1,4 @@
-"""OpenRouter tool-calling loop wired to the er.agent MCP server over the real
+"""Tool-calling loop wired to the er.agent MCP server over the real
 MCP protocol (an mcp.Client, not a direct Python import of er.agent.tools) -
 the agent is deliberately just another MCP client, the same one Claude
 Desktop or any other tool would use to talk to er.agent.mcp_server.
@@ -17,7 +17,10 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import os
+import sys
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -29,6 +32,7 @@ from er.config import REPO_ROOT, AppConfig
 
 from .facts import normalise_placeholders, referenced_fact_ids, render_answer, same_source_value
 from .gates import first_failure, validate_facts
+from .genui import prompt_section, visual_hint
 from .models import AskResult, Citation, Derivation, Evidence, Fact
 from .payloads import fit
 from .retry import error_message, is_transient, timeout
@@ -70,6 +74,23 @@ def _tool_message(name: str, args: dict[str, Any]) -> str:
         concept = args.get("tag")
         what = f"the {concept} series" if concept else "available concepts"
         return f"Reading as-filed XBRL financials for {args.get('identifier', 'the issuer')} ({what})"
+    if name == "get_adviser_profile":
+        return f"Reading Form ADV for {args.get('identifier', 'the adviser')}"
+    if name == "search_private_offerings":
+        what = f"“{args['query']}”" if args.get("query") else "recent filings"
+        return f"Searching Form D private offerings for {what}"
+    if name == "get_security_ownership":
+        return f"Reading 13F holders of {args.get('identifier', 'the security')}"
+    if name == "get_short_activity":
+        return f"Reading short sale volume and fails for {args.get('identifier', 'the security')}"
+    if name == "lookup_private_entity":
+        return f"Checking the provisional private-entity registry for “{args.get('query', '')}”"
+    if name == "get_private_entity":
+        return f"Reading provisional entity {args.get('entity_id', 'the entity')}"
+    if name == "get_security_holders":
+        return f"Reversing N-PORT for holders of {args.get('identifier', 'the issuer')}"
+    if name == "search_filings":
+        return f"Searching SEC filing text for “{args.get('query', '')}”"
     return f"Calling {name}"
 
 SYSTEM_PROMPT = """You are an assistant answering questions about legal entities \
@@ -78,6 +99,20 @@ that data directly. Always call a tool to look up real data before stating a \
 fact - never invent identifiers, dates, counts, or relationships. What an \
 adviser says about itself (fees, strategy, conflicts) comes from its Form ADV \
 brochure text, through search_adv_documents.
+
+If search_entity has no plausible GLEIF match for a private SPV or project \
+company, call lookup_private_entity. Its records are PROVISIONAL curated \
+public-source records, never GLEIF LEIs; cite them as provisional. A private \
+record already includes both incoming and outgoing relationships, so one \
+lookup is enough to state the direct owner; do not enumerate the whole graph \
+unless the user asks for it. For narrative disclosures that are not in the \
+structured tables (JV terms, lease or residual-value language, risk factors), \
+call search_filings and quote the returned passage; use at most two \
+search_filings calls, start with a short exact phrase and the issuer CIK when \
+known, and if it returns no hits say the filing text was not found rather than \
+searching indefinitely. To find which registered \
+funds hold an issuer's bond, use get_security_holders; it is a reverse N-PORT \
+lookup, not a legal ownership register.
 
 Every tool result contains an `evidence` array of objects with an `evidence_id` \
 field (looking like "ev_xxxxxxxxxx") - that exact string, copied verbatim, is \
@@ -106,6 +141,11 @@ what had been filed by then, not from today's figures. A derived value it return
 (a period-over-period change, a ratio, a balance residual) is a fact - cite it \
 rather than computing it yourself.
 
+An investment adviser's regulatory AUM, clients and private funds come from \
+get_adviser_profile (Form ADV); private raises from search_private_offerings \
+(Form D); who holds a security from get_security_ownership (13F); short sale \
+volume and fails-to-deliver from get_short_activity.
+
 "Owner", "holder" and "parent" are different relationships here. A 13F holding \
 means the manager reported investment discretion over the position; an N-PORT \
 holding is a position in a registered fund's own portfolio; a Schedule \
@@ -120,7 +160,12 @@ identifier). Its `citations` list must map each marker number to the exact \
 evidence_id (copied from a tool result's `evidence` array) that supports that \
 claim - never a made-up or guessed string. Do not state a numeric confidence \
 score; if the data is incomplete or ambiguous, say so in the answer text \
-instead."""
+instead.
+
+When the question asks for a chart, a table, a comparison or a trend, and the \
+tool results hold the values as facts, end the `answer` with one \
+```openui-lang block (see Visualizations below) whose values are fact \
+placeholders - the workspace draws it in place of a markdown table."""
 
 SUBMIT_ANSWER_TOOL: dict[str, Any] = {
     "type": "function",
@@ -135,7 +180,10 @@ SUBMIT_ANSWER_TOOL: dict[str, Any] = {
             "properties": {
                 "answer": {
                     "type": "string",
-                    "description": "The final answer text, with inline [n] citation markers.",
+                    "description": (
+                        "The final answer text, with inline [n] citation markers. It may end with one "
+                        "```openui-lang visualization block whose values are {{f:fact_id}} placeholders."
+                    ),
                 },
                 "citations": {
                     "type": "array",
@@ -157,7 +205,14 @@ SUBMIT_ANSWER_TOOL: dict[str, Any] = {
 
 def mcp_stdio_params(cfg: AppConfig) -> StdioServerParameters:
     command, *args = cfg.agent.mcp_server_command
-    return StdioServerParameters(command=command, args=args, cwd=str(REPO_ROOT))
+    # "python" means this interpreter, so a host without uv (Vercel) runs the
+    # server the same way. The child gets this process's environment (on a
+    # host the settings arrive as env vars, not a .env file it could reread)
+    # and its import path - Vercel adds its dependency directory at runtime.
+    if command == "python":
+        command = sys.executable
+    path = os.pathsep.join([str(REPO_ROOT / "src"), *(entry for entry in sys.path if entry)])
+    return StdioServerParameters(command=command, args=args, cwd=str(REPO_ROOT), env={**os.environ, "PYTHONPATH": path})
 
 
 def _mcp_tool_to_openai_schema(tool: MCPTool) -> dict[str, Any]:
@@ -171,23 +226,27 @@ def _mcp_tool_to_openai_schema(tool: MCPTool) -> dict[str, Any]:
     }
 
 
-async def _call_openrouter(
+async def _call_model(
     cfg: AppConfig,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     tool_choice: dict[str, Any] | None = None,
+    session: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "model": cfg.agent.openrouter_model,
+        "model": cfg.agent.model,
         "messages": messages,
         "tools": tools,
     }
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
-    async with httpx.AsyncClient(timeout=timeout(90, cfg.agent.openrouter_connect_timeout_seconds)) as http:
+    headers = {"Authorization": f"Bearer {cfg.llm_api_key}"}
+    if session:
+        headers[cfg.agent.session_header] = session
+    async with httpx.AsyncClient(timeout=timeout(90, cfg.agent.connect_timeout_seconds)) as http:
         resp = await http.post(
-            f"{cfg.agent.openrouter_base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {cfg.openrouter_api_key}"},
+            f"{cfg.agent.base_url}/chat/completions",
+            headers=headers,
             json=payload,
         )
         resp.raise_for_status()
@@ -363,9 +422,9 @@ async def ask(
     # citations. Force a real lookup before it can submit an answer.
     force_search_entity = {"type": "function", "function": {"name": "search_entity"}}
 
-    user_content = question
+    user_content = question + visual_hint(cfg, question)
     if entity_id:
-        user_content = f"(The user is currently viewing entity_id={entity_id}.)\n{question}"
+        user_content = f"(The user is currently viewing entity_id={entity_id}.)\n{user_content}"
 
     prior_messages = [
         {"role": turn["role"], "content": turn["content"]}
@@ -373,7 +432,7 @@ async def ask(
         if turn.get("role") in {"user", "assistant"} and turn.get("content")
     ]
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + prompt_section(cfg)},
         *prior_messages,
         {"role": "user", "content": user_content},
     ]
@@ -381,6 +440,7 @@ async def ask(
     evidence_store: dict[str, Evidence] = {}
     fact_store: dict[str, Fact] = {}
     derivation_store: dict[str, Derivation] = {}
+    tool_calls_by_name: dict[str, int] = {}
     # What the verifier judges the answer against: every tool call made, with
     # its arguments and what came back. Kept separately from `messages`
     # because that list also carries the model's own prose, which would let a
@@ -388,6 +448,7 @@ async def ask(
     tool_transcript: list[dict[str, Any]] = []
     nudged_to_submit = False
     must_gather_evidence = True
+    session = str(uuid.uuid4())
 
     run_started = time.monotonic()
     span_ids = itertools.count(1)
@@ -452,11 +513,20 @@ async def ask(
             tool_choice = force_submit_answer
         else:
             tool_choice = None
-        attempts = cfg.agent.openrouter_retries + 1
+        # A named tool_choice alone is a request the provider may ignore late
+        # in a long conversation (OpenCode Go has answered a forced
+        # submit_answer with another lookup), so a forced turn offers only
+        # that tool.
+        turn_tools = (
+            [tool for tool in tools_schema if tool["function"]["name"] == tool_choice["function"]["name"]]
+            if tool_choice
+            else tools_schema
+        )
+        attempts = cfg.agent.retries + 1
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
             try:
-                response = await _call_openrouter(cfg, messages, tools_schema, tool_choice=tool_choice)
+                response = await _call_model(cfg, messages, turn_tools, tool_choice=tool_choice, session=session)
                 break
             except Exception as exc:
                 failed = time.monotonic()
@@ -464,7 +534,7 @@ async def ask(
                 error = _describe(exc) + (f" \u00b7 retrying (attempt {attempt} of {attempts})" if retrying else "")
                 await _trace(
                     lambda span_id: llm_span(
-                        span_id, turn, cfg.agent.openrouter_model, tool_choice,
+                        span_id, turn, cfg.agent.model, tool_choice,
                         _ms(started), int((failed - started) * 1000), error=error,
                     )
                 )
@@ -473,18 +543,18 @@ async def ask(
                         on_event,
                         {"type": "status", "message": "The model provider dropped the request \u2014 retrying\u2026"},
                     )
-                    await _backoff(cfg.agent.openrouter_retry_backoff_seconds * 2 ** (attempt - 1))
+                    await _backoff(cfg.agent.retry_backoff_seconds * 2 ** (attempt - 1))
                     continue
                 if is_transient(exc):
                     raise ModelUnavailableError(
-                        f"The model provider (OpenRouter) failed {attempts} times in a row "
+                        f"The model provider failed {attempts} times in a row "
                         f"({_describe(exc)}). This is usually temporary \u2014 try again in a moment."
                     ) from exc
                 raise
         finished = time.monotonic()
         llm_span_id = await _trace(
             lambda span_id: llm_span(
-                span_id, turn, cfg.agent.openrouter_model, tool_choice,
+                span_id, turn, cfg.agent.model, tool_choice,
                 _ms(started), int((finished - started) * 1000), response=response,
             )
         )
@@ -520,6 +590,17 @@ async def ask(
         for call in tool_calls:
             name = call["function"]["name"]
             args = json.loads(call["function"]["arguments"] or "{}")
+            if name != "submit_answer":
+                tool_calls_by_name[name] = tool_calls_by_name.get(name, 0) + 1
+                if name == "search_filings" and tool_calls_by_name[name] > 2:
+                    messages.append({
+                        "role": "tool", "tool_call_id": call["id"],
+                        "content": (
+                            "search_filings budget exhausted (2 calls). Stop broadening the query. "
+                            "Use the passages already returned, or say the filing text was not found."
+                        ),
+                    })
+                    continue
 
             if name == "submit_answer":
                 await _emit(on_event, {"type": "status", "message": "Composing the answer…"})

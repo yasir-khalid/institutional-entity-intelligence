@@ -1,32 +1,41 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import Link from "next/link";
-import dynamic from "next/dynamic";
-import { ArrowUp, FileText, SquareTerminal } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
+import Link from "next/link";
+import {
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  RotateCcw,
+  Square,
+  Waypoints,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { LoadError, Loading } from "@/components/WorkspaceStates";
 import Markdown from "@/components/Markdown";
 import EvidenceList from "@/components/EvidenceLayer";
-import VerificationBadge from "@/components/VerificationBadge";
+import VerificationBadge, {
+  VerificationPill,
+} from "@/components/VerificationBadge";
 import AuditTrail from "@/components/AuditTrail";
 import { useResource } from "@/hooks/use-resource";
-import { useDeveloperView } from "@/hooks/use-developer-view";
 import { workspaceMutation, type Investigation } from "@/lib/api";
 
-const DeveloperPanel = dynamic(() => import("@/components/DeveloperPanel"));
 const pending = (doc: Investigation) =>
   doc.status === "queued" || doc.status === "running";
+
+/* The research note is a conversation, not a report page: a centered reading
+ * column, the question as a right-aligned bubble, the sourced answer below it,
+ * and a composer docked to the bottom of the viewport. Sources stay one click
+ * away rather than occupying a permanent side rail, so the answer keeps the
+ * reference's calm reading rhythm without giving up provenance. */
 
 export default function InvestigationView({ id }: { id: string }) {
   const resource = useResource<Investigation>(
@@ -35,21 +44,53 @@ export default function InvestigationView({ id }: { id: string }) {
   );
   const doc = resource.data;
   const [question, setQuestion] = useState("");
-  const [title, setTitle] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [developer, setDeveloper] = useDeveloperView();
   const [focused, setFocused] = useState<string | null>(null);
-  const [sourceTurn, setSourceTurn] = useState<number | null>(null);
+  const [openSources, setOpenSources] = useState<number | null>(null);
+  const thread = useRef<HTMLDivElement>(null);
+  const followupInput = useRef<HTMLTextAreaElement>(null);
+  const previousTurns = useRef<number | null>(null);
+  const status = doc?.status;
+  useEffect(() => {
+    thread.current?.scrollTo({ top: 0 });
+  }, [id]);
   useEffect(() => {
     if (focused)
       document
         .getElementById(`evidence-${focused}`)
         ?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [focused, sourceTurn]);
-  const operation = useRef<
-    { question: string; id: string; trace: boolean } | undefined
-  >(undefined);
+  }, [focused, openSources]);
+  useEffect(() => {
+    const count = doc?.turns.length;
+    if (count === undefined) return;
+    if (previousTurns.current === null) {
+      previousTurns.current = count;
+      return;
+    }
+    if (count > previousTurns.current) {
+      const last = count - 1;
+      requestAnimationFrame(() =>
+        document
+          .getElementById(`turn-${last}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+    }
+    previousTurns.current = count;
+  }, [doc?.turns.length]);
+  useEffect(() => {
+    if (status === "queued" || status === "running") {
+      requestAnimationFrame(() =>
+        thread.current?.scrollTo({
+          top: thread.current.scrollHeight,
+          behavior: "smooth",
+        }),
+      );
+    }
+  }, [status]);
+  const operation = useRef<{ question: string; id: string } | undefined>(
+    undefined,
+  );
   async function mutate(path: string, body?: unknown, method?: string) {
     setBusy(true);
     setError(undefined);
@@ -68,282 +109,280 @@ export default function InvestigationView({ id }: { id: string }) {
       setBusy(false);
     }
   }
+  async function sendFollowUp(text: string) {
+    if (!doc || busy || !text.trim() || pending(doc)) return false;
+    if (operation.current?.question !== text.trim())
+      operation.current = {
+        question: text.trim(),
+        id: crypto.randomUUID(),
+      };
+    const sent = await mutate("/api/investigations", {
+      question: text.trim(),
+      request_id: operation.current.id,
+      investigation_id: id,
+      entity_id: doc.entity_id,
+    });
+    if (sent) operation.current = undefined;
+    return sent;
+  }
   async function followup(event: FormEvent) {
     event.preventDefault();
-    if (!doc || busy || !question.trim()) return;
-    if (
-      operation.current?.question !== question.trim() ||
-      operation.current.trace !== developer
-    )
-      operation.current = {
-        question: question.trim(),
-        id: crypto.randomUUID(),
-        trace: developer,
-      };
-    if (
-      await mutate("/api/investigations", {
-        question: question.trim(),
-        request_id: operation.current.id,
-        investigation_id: id,
-        entity_id: doc.entity_id,
-        trace: developer,
-      })
-    ) {
+    if (await sendFollowUp(question)) {
       setQuestion("");
-      operation.current = undefined;
+      followupInput.current?.focus();
+    }
+  }
+  function followupKeys(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
     }
   }
   if (!doc)
     return (
-      <div className="workspace-page">
-        {resource.error ? (
-          <LoadError error={resource.error} retry={resource.refresh} />
-        ) : (
-          <Loading />
-        )}
+      <div className="chat-page">
+        <div className="chat-loading">
+          {resource.error ? (
+            <LoadError error={resource.error} retry={resource.refresh} />
+          ) : (
+            <Loading />
+          )}
+        </div>
       </div>
     );
+
   const running = pending(doc);
-  const answers = doc.turns.map((turn) => turn.result);
-  // Fact IDs are stable across identical lookups, but their evidence receipts
-  // belong to a run. Never merge maps from separate answers and overwrite that
-  // ownership. The rail selects an answer; a citation selects its owning run.
-  const selectedTurn = Math.min(
-    sourceTurn ?? answers.length - 1,
-    answers.length - 1,
-  );
-  const sourceAnswer = answers[selectedTurn];
-  const activity = doc.events
-    .filter((event) => event.type !== "trace")
-    .at(-1)?.message;
-  function focusEvidence(evidenceId: string) {
-    const index = answers.findIndex((answer) => evidenceId in answer.evidence);
-    if (index >= 0) setSourceTurn(index);
-    setFocused(evidenceId);
-    document
-      .getElementById(`evidence-${evidenceId}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  const uniqueSteps = new Map<string, string>();
+  for (const event of doc.events) {
+    if (event.type !== "trace" && event.message)
+      uniqueSteps.set(event.message, event.message);
   }
+  const steps = [...uniqueSteps.values()];
+  const activity = steps.at(-1);
+  function focusEvidence(evidenceId: string) {
+    const index = doc!.turns.findIndex(
+      (turn) => evidenceId in turn.result.evidence,
+    );
+    if (index >= 0) setOpenSources(index);
+    setFocused(evidenceId);
+  }
+  const lastTurn = doc.turns.length - 1;
   return (
-    <div className="workspace-page investigation-page">
-      <div className="workspace-heading compact">
-        <div className="workspace-actions">
-          <Badge
-            variant={doc.status === "failed" ? "destructive" : "secondary"}
-          >
-            {doc.status === "succeeded" ? "Complete" : doc.status}
-          </Badge>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setDeveloper(!developer)}
-          >
-            <SquareTerminal /> Developer
-          </Button>
-        </div>
-        {developer && !doc.trace && (
-          <p className="workspace-note">
-            No developer trace was collected for this question. With Developer
-            enabled, the next follow-up will collect a trace.
-          </p>
-        )}
-        {title !== undefined ? (
-          <form
-            className="flex gap-2"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              if (await mutate(`/api/investigations/${id}`, { title }, "PATCH"))
-                setTitle(undefined);
-            }}
-          >
-            <Input
-              aria-label="Investigation title"
-              maxLength={120}
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              required
+    <div className="chat-page">
+      <h1 className="sr-only">{doc.title}</h1>
+      <div className="chat-scroll" ref={thread}>
+        <div className="chat-thread">
+          {(error || resource.error) && (
+            <LoadError
+              error={error || resource.error!}
+              retry={() => {
+                setError(undefined);
+                resource.refresh();
+              }}
             />
-            <Button disabled={busy || !title.trim()}>Save</Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setTitle(undefined)}
-            >
-              Cancel
-            </Button>
-          </form>
-        ) : (
-          <>
-            <h1>{doc.title}</h1>
-            <Button
-              variant="link"
-              size="sm"
-              onClick={() => setTitle(doc.title)}
-            >
-              Rename investigation
-            </Button>
-          </>
-        )}
-        <span>
-          {doc.entity_id ? (
-            <Link href={`/entities/${encodeURIComponent(doc.entity_id)}`}>
-              Entity context: {doc.entity_id}
-            </Link>
-          ) : (
-            "Cross-source research"
-          )}{" "}
-          · Saved automatically · shared workspace
-        </span>
-      </div>
-      {(error || resource.error) && (
-        <LoadError
-          error={error || resource.error!}
-          retry={() => {
-            setError(undefined);
-            resource.refresh();
-          }}
-        />
-      )}
-      <div className="investigation-columns">
-        <section className="conversation" aria-label="Research conversation">
+          )}
+
           {doc.turns.map((turn, index) => (
-            <article key={`${turn.completed_at}-${index}`}>
-              <div className="question-turn">
-                <span>You</span>
+            <article className="chat-turn" id={`turn-${index}`} key={`${turn.completed_at}-${index}`}>
+              <div className="chat-user-turn">
                 <p>{turn.question}</p>
               </div>
-              <div className="answer-turn">
-                <div>
-                  <span className="answer-label">Research answer</span>
+              <div className="chat-assistant">
+                <span className="chat-avatar" aria-hidden>
+                  <Waypoints />
+                </span>
+                <div className="chat-assistant-body">
+                  <div className="chat-agent-head">
+                    <span className="chat-agent-name">Research</span>
+                    <span className="chat-agent-context">
+                      ·{" "}
+                      {doc.entity_id ? (
+                        <Link
+                          href={`/entities/${encodeURIComponent(doc.entity_id)}`}
+                        >
+                          entity scope
+                        </Link>
+                      ) : (
+                        "cross-source"
+                      )}
+                    </span>
+                    <VerificationPill verification={turn.result.verification} />
+                  </div>
+                  {index === lastTurn && steps.length > 0 && (
+                    <details className="chat-activity">
+                      <summary>
+                        <ChevronRight aria-hidden />
+                        Activity
+                        <span>
+                          · {steps.length} step{steps.length === 1 ? "" : "s"}
+                        </span>
+                      </summary>
+                      <ol>
+                        {steps.map((step, stepIndex) => (
+                          <li key={`${stepIndex}-${step}`}>{step}</li>
+                        ))}
+                      </ol>
+                    </details>
+                  )}
                   <Markdown
                     content={turn.result.answer}
                     citations={turn.result.citations}
                     evidence={turn.result.evidence}
                     onCitationClick={focusEvidence}
+                    onFollowUp={(text) => void sendFollowUp(text)}
                   />
                   <VerificationBadge verification={turn.result.verification} />
                   <AuditTrail answer={turn.result} />
+                  <div className="chat-sources">
+                    <button
+                      type="button"
+                      className="chat-sources-toggle"
+                      aria-expanded={openSources === index}
+                      onClick={() =>
+                        setOpenSources((value) => (value === index ? null : index))
+                      }
+                    >
+                      <FileText aria-hidden />
+                      Sources &amp; addressed facts
+                      <span>
+                        · {Object.keys(turn.result.evidence).length}
+                      </span>
+                      <ChevronDown
+                        aria-hidden
+                        className={openSources === index ? "is-open" : undefined}
+                      />
+                    </button>
+                    {openSources === index && (
+                      <div className="chat-sources-body">
+                        <EvidenceList
+                          evidence={turn.result.evidence}
+                          facts={turn.result.facts}
+                          derivations={turn.result.derivations}
+                          focusedEvidenceId={focused}
+                          contexts={[turn.result]}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </article>
           ))}
+
           {doc.status !== "succeeded" && (
-            <article>
-              <div className="question-turn">
-                <span>You</span>
+            <article className="chat-turn">
+              <div className="chat-user-turn">
                 <p>{doc.question}</p>
               </div>
-              {running ? (
-                <div role="status" className="research-progress">
-                  <span className="research-pulse" />
-                  {activity ||
-                    (doc.status === "queued"
-                      ? "Queued for research…"
-                      : "Researching source records…")}
-                  <p>
-                    You can close this tab. This run is saved on the server.
-                  </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => mutate(`/api/investigations/${id}/stop`)}
-                  >
-                    Stop research
-                  </Button>
+              <div className="chat-assistant">
+                <span className="chat-avatar" aria-hidden>
+                  <Waypoints />
+                </span>
+                <div className="chat-assistant-body">
+                  <div className="chat-agent-head">
+                    <span className="chat-agent-name">Research</span>
+                    <span className="chat-agent-context">
+                      · {running ? "working" : doc.status}
+                    </span>
+                  </div>
+                  {running ? (
+                    <p className="chat-preparing" role="status">
+                      <span className="research-pulse" />
+                      {activity ||
+                        (doc.status === "queued"
+                          ? "Queued for research…"
+                          : "Preparing answer…")}
+                    </p>
+                  ) : (
+                    <div className="chat-failure">
+                      <p role="alert">
+                        {doc.status === "canceled"
+                          ? "Research stopped. Previous answers are unchanged."
+                          : doc.error || "Research could not finish."}
+                      </p>
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          mutate(`/api/investigations/${id}/retry`)
+                        }
+                      >
+                        <RotateCcw /> Retry question
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="research-progress">
-                  <p role="alert">
-                    {doc.status === "canceled"
-                      ? "Research stopped. Previous answers are unchanged."
-                      : doc.error || "Research could not finish."}
-                  </p>
-                  <Button
-                    disabled={busy}
-                    onClick={() => mutate(`/api/investigations/${id}/retry`)}
-                  >
-                    Retry question
-                  </Button>
-                </div>
-              )}
+              </div>
             </article>
           )}
-          {doc.status === "succeeded" && (
-            <form onSubmit={followup}>
-              <Field>
-                <FieldLabel htmlFor="followup">Ask a follow-up</FieldLabel>
-                <div className="flex gap-2">
-                  <Input
-                    id="followup"
-                    maxLength={4000}
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    required
-                    placeholder="Continue this investigation…"
-                  />
-                  <Button
-                    type="submit"
-                    disabled={busy || !question.trim()}
-                    aria-label="Send follow-up"
-                  >
-                    <ArrowUp />
-                  </Button>
-                </div>
-              </Field>
-            </form>
-          )}
-        </section>
-        <aside className="investigation-evidence" aria-label="Source evidence">
-          <h2>
-            <FileText size={16} /> Sources & addressed facts
-          </h2>
-          {answers.length > 1 && (
-            <label className="workspace-note">
-              Sources for answer
-              <Select
-                value={String(selectedTurn)}
-                onValueChange={(value) => {
-                  setSourceTurn(Number(value));
-                  setFocused(null);
-                }}
-              >
-                <SelectTrigger className="mt-1 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {doc.turns.map((turn, index) => (
-                    <SelectItem key={index} value={String(index)}>
-                      {index + 1}. {turn.question}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-          )}
-          <EvidenceList
-            evidence={sourceAnswer?.evidence ?? {}}
-            facts={sourceAnswer?.facts ?? {}}
-            derivations={sourceAnswer?.derivations ?? {}}
-            focusedEvidenceId={focused}
-            contexts={sourceAnswer ? [sourceAnswer] : []}
-          />
-        </aside>
+        </div>
       </div>
-      {developer && (
-        <DeveloperPanel
-          open={developer}
-          onClose={() => setDeveloper(false)}
-          spans={doc.events.flatMap((event) =>
-            event.span ? [event.span] : [],
+
+      <div className="chat-dock">
+        <div className="chat-dock-inner">
+          {doc.status === "succeeded" ? (
+            <form className="chat-composer" onSubmit={followup}>
+              <textarea
+                ref={followupInput}
+                id="followup"
+                aria-label="Ask a follow-up"
+                maxLength={4000}
+                rows={1}
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={followupKeys}
+                placeholder="Ask a follow-up…"
+                required
+              />
+              <div className="chat-composer-foot">
+                <span className="chat-hint">
+                  Enter to send · Shift + Enter for a new line
+                </span>
+                <button
+                  className="chat-send"
+                  disabled={busy || !question.trim()}
+                  type="submit"
+                  aria-label="Send follow-up"
+                >
+                  <ArrowUp />
+                </button>
+              </div>
+            </form>
+          ) : running ? (
+            <div className="chat-dock-status" role="status">
+              <span className="research-pulse" />
+              <span>
+                {activity ||
+                  (doc.status === "queued"
+                    ? "Queued for research…"
+                    : "Researching source records…")}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => mutate(`/api/investigations/${id}/stop`)}
+              >
+                <Square /> Stop
+              </Button>
+            </div>
+          ) : (
+            <div className="chat-dock-status">
+              <span>This run did not finish.</span>
+              <Button
+                disabled={busy}
+                onClick={() => mutate(`/api/investigations/${id}/retry`)}
+              >
+                <RotateCcw /> Retry
+              </Button>
+            </div>
           )}
-          running={running}
-          question={doc.question}
-          activity={activity ?? null}
-          error={doc.error}
-          onStartAgent={null}
-        />
-      )}
+          <p className="chat-footnote">
+            Answers use GLEIF and SEC records; every figure is cited. Agents can
+            make mistakes — check the sources.
+          </p>
+        </div>
+      </div>
+
     </div>
   );
 }

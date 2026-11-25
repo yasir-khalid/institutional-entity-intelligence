@@ -1,11 +1,10 @@
-import { Suspense } from "react";
 import EntityWorkspace from "@/components/EntityWorkspace";
-import { Loading } from "@/components/WorkspaceStates";
+import { firstValues, type PageSearchParams } from "@/lib/search-params";
 
-export default function EntitiesPage() {
-  return (
-    <Suspense fallback={<Loading />}>
-      <EntityWorkspace />
-    </Suspense>
-  );
+export default async function EntitiesPage({
+  searchParams,
+}: {
+  searchParams: PageSearchParams;
+}) {
+  return <EntityWorkspace searchParams={firstValues(await searchParams)} />;
 }

@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 /** The one section heading treatment used across the app. */
 export function SectionLabel({ children, icon }: { children: ReactNode; icon?: ReactNode }) {
   return (
-    <div className="text-ink-subtle flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.08em] uppercase">
+    <div className="text-ink-subtle flex items-center gap-1.5 text-xs font-semibold tracking-[0.08em] uppercase">
       {icon}
       {children}
     </div>
@@ -25,7 +25,7 @@ export { Badge, type BadgeVariant } from "@/components/ui/badge";
 /** Identifiers (LEI/CIK/CUSIP/ISIN) - tabular figures so they align when
  * stacked. Deliberately not monospace: the UI has one typeface. */
 export function Mono({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <span className={`tabular text-[11px] tracking-tight ${className}`}>{children}</span>;
+  return <span className={`tabular text-xs tracking-tight ${className}`}>{children}</span>;
 }
 
 /** One label/value pair inside a definition grid. The grid itself owns the

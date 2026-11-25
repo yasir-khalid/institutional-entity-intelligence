@@ -1,26 +1,13 @@
 from __future__ import annotations
 
-import zipfile
+import base64
 
-from er.config import AppConfig
-from er.serving.store import ADV_DOCUMENTS, ADV_PAGES, Store
+from er.serving.store import ADV_PAGES, ADV_PDFS, Store
 
 
-def load_document(cfg: AppConfig, store: Store, pdf_file_name: str) -> bytes | None:
-    if not pdf_file_name or any(char in pdf_file_name for char in ('/', '\\', '\r', '\n', '"')):
-        return None
-    document = next(iter(store.find(ADV_DOCUMENTS, where={"pdf_file_name": pdf_file_name}, size=1, fields=("source_file",))), None)
-    if document is None:
-        return None
-    archive_name, separator, member = document["source_file"].partition(":")
-    archive_path = cfg.sec_adv.raw_dir / archive_name
-    if not separator or not archive_path.is_file():
-        return None
-    with zipfile.ZipFile(archive_path) as archive:
-        try:
-            return archive.read(member)
-        except KeyError:
-            return None
+def load_document(store: Store, pdf_file_name: str) -> bytes | None:
+    document = store.get(ADV_PDFS, pdf_file_name, fields=("content",)) if pdf_file_name else None
+    return base64.b64decode(document["content"]) if document else None
 
 
 def search_pages(store: Store, query: str, crd_number: str | None = None, limit: int = 10) -> list[dict]:

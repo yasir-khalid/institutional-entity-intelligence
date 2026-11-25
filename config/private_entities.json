@@ -1,0 +1,150 @@
+{
+  "version": "2026-11-07",
+  "sources": [
+    {
+      "id": "sp-beignet",
+      "title": "Beignet Investor LLC's $27.3 Billion Senior Secured Debt Assigned Preliminary 'A+' Rating; Outlook Stable",
+      "publisher": "S&P Global Ratings",
+      "published_at": "2025-10-16",
+      "url": "https://www.spglobal.com/ratings/en/regulatory/article/-/view/sourceId/101651795"
+    },
+    {
+      "id": "meta-10q",
+      "title": "Meta Platforms, Inc. Form 10-Q for the quarter ended 30 September 2025, Note 13",
+      "publisher": "U.S. Securities and Exchange Commission",
+      "published_at": "2025-10-30",
+      "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828025047240/meta-20250930.htm"
+    },
+    {
+      "id": "owl-reit-10q",
+      "title": "Blue Owl Real Estate Net Lease Trust Form 10-Q for the quarter ended 30 September 2025",
+      "publisher": "U.S. Securities and Exchange Commission",
+      "published_at": "2025-11-07",
+      "url": "https://www.sec.gov/Archives/edgar/data/1944366/000194436625000126/osnl-20250930.htm"
+    },
+    {
+      "id": "lpsc-u37425",
+      "title": "Louisiana Public Service Commission Docket U-37425, Entergy Louisiana ex parte",
+      "publisher": "Louisiana Public Service Commission",
+      "published_at": "2026-01-14",
+      "url": "https://www.all4energy.org/wp-content/uploads/2026/01/2026-01-14-U-37425-AAE-UCS-Mtn-for-Investigation.pdf"
+    },
+    {
+      "id": "opencorporates-laidley",
+      "title": "LAIDLEY LLC — Louisiana company number 46043373Q",
+      "publisher": "OpenCorporates",
+      "published_at": "2026-05-27",
+      "url": "https://opencorporates.com/companies/us_la/46043373Q"
+    },
+    {
+      "id": "all4energy",
+      "title": "Louisiana Data Centers: Financing and Energy Overview, Figure 1",
+      "publisher": "Alliance for Affordable Energy / Union of Concerned Scientists",
+      "published_at": "2026-05-18",
+      "url": "https://www.all4energy.org/wp-content/uploads/2026/05/2026-05-18-Data-Centers-Financing-Energy-Overview-Report.pdf"
+    },
+    {
+      "id": "meta-press",
+      "title": "Meta Announces Joint Venture with Funds Managed by Blue Owl Capital to Develop Hyperion Data Center",
+      "publisher": "Meta Platforms, Inc.",
+      "published_at": "2025-10-21",
+      "url": "https://investor.atmeta.com/investor-news/press-release-details/2025/Meta-Announces-Joint-Venture-with-Funds-Managed-by-Blue-Owl-Capital-to-Develop-Hyperion-Data-Center/default.aspx"
+    }
+  ],
+  "entities": [
+    {
+      "id": "provisional:beignet-investor",
+      "name": "Beignet Investor LLC",
+      "aliases": ["Beignet Investor", "Beignet", "Beignet issuer"],
+      "entity_type": "issuer",
+      "jurisdiction": "US-DE",
+      "registration_id": null,
+      "registration_authority": "Delaware Division of Corporations",
+      "status": "active",
+      "confidence": "public_structure_chart",
+      "notes": "Bankruptcy-remote issuer of the $27.294B 6.581% senior secured notes due 2049 and holder of the 80% Project Beignet Holdings JV interest. No GLEIF LEI was found in the 2026-09 snapshot; treat as a provisional, curated entity.",
+      "source_ids": ["sp-beignet", "owl-reit-10q", "all4energy"],
+      "relationships": [
+        {"to": "provisional:project-beignet", "type": "owns", "label": "80% JV interest", "pct": 80, "as_of": "2025-10-21", "source_ids": ["sp-beignet", "meta-10q"]}
+      ]
+    },
+    {
+      "id": "provisional:beignet-pledgor",
+      "name": "Beignet Pledgor LLC",
+      "aliases": ["Beignet Pledgor"],
+      "entity_type": "holding_company",
+      "jurisdiction": "US-DE",
+      "registration_id": null,
+      "registration_authority": "Delaware Division of Corporations",
+      "status": "active",
+      "confidence": "public_structure_chart",
+      "notes": "Holding vehicle that owns 100% of Beignet Investor LLC and pledges its interest. Provisional; no GLEIF LEI found.",
+      "source_ids": ["sp-beignet", "all4energy"],
+      "relationships": [
+        {"to": "provisional:beignet-investor", "type": "owns", "label": "100% ownership", "pct": 100, "as_of": "2025-10-21", "source_ids": ["sp-beignet", "all4energy"]}
+      ]
+    },
+    {
+      "id": "provisional:iris-crossing",
+      "name": "Iris Crossing LLC",
+      "aliases": ["Iris Crossing"],
+      "entity_type": "jv_member",
+      "jurisdiction": "US-DE",
+      "registration_id": null,
+      "registration_authority": "Delaware Division of Corporations",
+      "status": "active",
+      "confidence": "public_structure_chart",
+      "notes": "Meta Platforms' wholly owned vehicle holding the 20% Project Beignet Holdings JV interest. Provisional; no GLEIF LEI found.",
+      "source_ids": ["sp-beignet", "meta-10q", "all4energy"],
+      "relationships": [
+        {"to": "provisional:project-beignet", "type": "owns", "label": "20% JV interest", "pct": 20, "as_of": "2025-10-21", "source_ids": ["sp-beignet", "meta-10q"]}
+      ]
+    },
+    {
+      "id": "provisional:project-beignet",
+      "name": "Project Beignet Holdings LLC",
+      "aliases": ["Project Beignet", "Beignet JV", "Beignet Holdings"],
+      "entity_type": "joint_venture",
+      "jurisdiction": null,
+      "registration_id": null,
+      "registration_authority": null,
+      "status": "active",
+      "confidence": "public_structure_chart",
+      "notes": "80% Blue Owl funds / 20% Meta joint venture that owns Laidley LLC and the Hyperion campus. Provisional; no GLEIF LEI found.",
+      "source_ids": ["sp-beignet", "meta-10q", "all4energy"],
+      "relationships": [
+        {"to": "provisional:laidley", "type": "owns", "label": "100% ownership", "pct": 100, "as_of": "2025-10-21", "source_ids": ["sp-beignet", "all4energy"]}
+      ]
+    },
+    {
+      "id": "provisional:laidley",
+      "name": "Laidley LLC",
+      "aliases": ["Laidley"],
+      "entity_type": "project_company",
+      "jurisdiction": "US-LA",
+      "registration_id": "46043373Q",
+      "registration_authority": "Louisiana Secretary of State",
+      "status": "active",
+      "confidence": "public_registry",
+      "notes": "Louisiana project company that owns the Hyperion campus, leases it to Pelican Leap LLC and holds the Entergy Louisiana power agreement. Company number 46043373Q from OpenCorporates.",
+      "source_ids": ["opencorporates-laidley", "lpsc-u37425", "meta-10q"],
+      "relationships": [
+        {"to": "provisional:pelican-leap", "type": "landlord_of", "label": "11 triple-net leases", "as_of": "2025-10-30", "source_ids": ["meta-10q"]}
+      ]
+    },
+    {
+      "id": "provisional:pelican-leap",
+      "name": "Pelican Leap LLC",
+      "aliases": ["Pelican Leap", "Meta tenant"],
+      "entity_type": "tenant",
+      "jurisdiction": "US-DE",
+      "registration_id": null,
+      "registration_authority": "Delaware Division of Corporations",
+      "status": "active",
+      "confidence": "public_structure_chart",
+      "notes": "Meta Platforms' wholly owned tenant and lessee under the 11 triple-net Hyperion leases; four-year initial term, options up to 20 years. Provisional; no GLEIF LEI found.",
+      "source_ids": ["meta-10q", "all4energy"],
+      "relationships": []
+    }
+  ]
+}

@@ -71,8 +71,7 @@ def test_saved_research_survives_api_restart_and_uses_existing_agent_path(monkey
                 restored = (await client.get(f"/api/investigations/{investigation_id}")).json()
                 assert len(restored["turns"]) == 6
                 assert restored["turns"][0]["result"]["evidence"]["ev1"]["source"] == "gleif"
-                listing = (await client.get("/api/investigations")).json()["items"]
-                assert listing[0]["id"] == investigation_id
+                assert (await client.get("/api/investigations")).status_code == 405
 
     asyncio.run(run())
     assert len(calls) == 6  # the idempotent POST never schedules another run

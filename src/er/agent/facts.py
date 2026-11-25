@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 from .models import Fact
@@ -12,6 +13,10 @@ _RENDERED = re.compile(r"(\$)?\{\{f:([a-zA-Z0-9_-]+)\}\}(%)?")
 _MALFORMED = re.compile(r"\{\{[^}]*\}?\}?")
 _CITATION = re.compile(r"\[\d+\]")
 _NUMBER = re.compile(r"(?<![\w])[-+]?\d[\d,]*(?:\.\d+)?%?(?![\w])")
+# A generative-UI block (OpenUI Lang) in an answer. It goes through the same
+# numeric-literal gate as prose; only its placeholder rendering differs.
+_UI_BLOCK = re.compile(r"(```(?:openui-lang|openui)[^\n]*\n.*?(?:```|$))", re.S)
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
 def normalise_placeholders(answer: str, facts: dict[str, Fact]) -> str:
@@ -28,16 +33,24 @@ def normalise_placeholders(answer: str, facts: dict[str, Fact]) -> str:
 
 
 def _strip_grounded_literals(prose: str, facts: dict[str, Fact], cited_evidence: set[str], question: str) -> str:
-    # An identifier or date copied whole from a cited fact (a CIK, a report
-    # date) or echoed from the question is not a new number. Only complete
-    # values of four or more characters count - a "31" inside a date is not a
-    # licence to write 31 anywhere.
+    # An identifier or date copied whole from a cited fact (a CIK, a CUSIP, a
+    # report date) or echoed from the question is not a new number. Amounts are
+    # deliberately excluded: a reported value, a share count or a percentage
+    # must still arrive as {{f:fact_id}}, so the gate cannot be bypassed by
+    # copying a number straight out of the fact map. Only complete values of
+    # four or more characters count - a "31" inside a date is not a licence to
+    # write 31 anywhere.
     grounded = {
-        str(text)
+        str(fact.value)
         for fact in facts.values()
         if fact.evidence_id in cited_evidence
-        for text in (fact.value, fact.as_of)
-        if text is not None and len(str(text)) >= 4
+        and isinstance(fact.value, str)
+        and len(fact.value) >= 4
+    }
+    grounded |= {
+        str(fact.as_of)
+        for fact in facts.values()
+        if fact.evidence_id in cited_evidence and fact.as_of and len(str(fact.as_of)) >= 4
     }
     grounded |= {token.strip(".,;:()?\"'") for token in question.split() if any(char.isdigit() for char in token)}
     for text in sorted(grounded, key=len, reverse=True):
@@ -57,7 +70,7 @@ def render_answer(
     if uncited:
         return None, f"fact placeholders are not covered by a submitted citation: {', '.join(uncited)}"
 
-    prose = _CITATION.sub("", _PLACEHOLDER.sub("", answer))
+    prose = _uncited_text(_PLACEHOLDER.sub("", answer))
     malformed = _MALFORMED.findall(prose)
     if malformed:
         return None, f"malformed fact placeholders (use {{{{f:fact_id}}}} exactly): {', '.join(malformed)}"
@@ -72,7 +85,46 @@ def render_answer(
         percent = match.group(3) if fact.unit != "percent" and match.group(3) else ""
         return f"{dollar}{display_value(fact)}{percent}"
 
-    return _RENDERED.sub(render, answer), None
+    parts = _UI_BLOCK.split(answer)
+    return "".join(
+        _render_ui_block(part, facts) if index % 2 else _RENDERED.sub(render, part)
+        for index, part in enumerate(parts)
+    ), None
+
+
+def _uncited_text(answer: str) -> str:
+    """The answer without citation markers. In a UI block a marker only ever
+    sits inside a string; a bare "[2500]" there is a one-value array."""
+    parts = _UI_BLOCK.split(answer)
+    return "".join(
+        _STRING.sub(lambda m: _CITATION.sub("", m.group(0)), part) if index % 2 else _CITATION.sub("", part)
+        for index, part in enumerate(parts)
+    )
+
+
+def _render_ui_block(block: str, facts: dict[str, Fact]) -> str:
+    """Inside a string literal a placeholder becomes the formatted value; as a
+    bare argument it becomes the raw value, so a chart gets a number."""
+    out: list[str] = []
+    in_string = False
+    index = 0
+    while index < len(block):
+        match = _PLACEHOLDER.match(block, index)
+        if match:
+            fact = facts[match.group(1)]
+            out.append(json.dumps(display_value(fact))[1:-1] if in_string else json.dumps(fact.value))
+            index = match.end()
+            continue
+        char = block[index]
+        if in_string and char == "\\":
+            out.append(block[index:index + 2])
+            index += 2
+            continue
+        if char == '"':
+            in_string = not in_string
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def display_value(fact: Fact) -> str:

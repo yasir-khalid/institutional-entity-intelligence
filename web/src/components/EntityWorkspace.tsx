@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import Link from "next/link";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { ExternalLink, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import EntityProfile from "@/components/EntityProfile";
+import { PageHeader } from "@/components/PageHeader";
 import { useResource } from "@/hooks/use-resource";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Loading, LoadError, NoData } from "@/components/WorkspaceStates";
@@ -53,8 +54,12 @@ const layoutStorage = {
   },
 };
 
-export default function EntityWorkspace() {
-  const params = useSearchParams();
+export default function EntityWorkspace({
+  searchParams,
+}: {
+  searchParams: Record<string, string>;
+}) {
+  const params = new URLSearchParams(searchParams);
   const query = params.get("q") || "";
   const type = (
     ["name", "lei", "cusip"].includes(params.get("type") || "")
@@ -70,14 +75,14 @@ export default function EntityWorkspace() {
     storage: layoutStorage,
     onlySaveAfterUserInteractions: true,
   });
-  const searchParams = new URLSearchParams({ query, search_type: type });
+  const apiParams = new URLSearchParams({ query, search_type: type });
   if (params.get("country"))
-    searchParams.set("country", params.get("country")!);
+    apiParams.set("country", params.get("country")!);
   const results = useResource<SearchResponse>(
-    query ? `/api/search?${searchParams}` : null,
+    query ? `/api/search?${apiParams}` : null,
   );
   const entityId =
-    selected?.query === searchParams.toString()
+    selected?.query === apiParams.toString()
       ? selected.id
       : results.data?.results[0]?.entity_id;
   const profile = useResource<EntityDetail>(
@@ -137,7 +142,7 @@ export default function EntityWorkspace() {
                     <button
                       onClick={() =>
                         setSelected({
-                          query: searchParams.toString(),
+                          query: apiParams.toString(),
                           id: result.entity_id,
                         })
                       }
@@ -187,20 +192,17 @@ export default function EntityWorkspace() {
   );
   return (
     <div className="workspace-page wide">
-      <div className="workspace-heading compact">
-        <p>Entity resolution</p>
-        <h1>Search the registers</h1>
-        <span>
-          One deterministic matcher across every source. Inspect the evidence
-          behind each link.
-        </span>
-      </div>
+      <PageHeader
+        eyebrow="Entity resolution"
+        title="Search the registers"
+        description="One deterministic matcher across every source. Retrieval ranks candidates; a close tie stays a review, not a confident match."
+      />
       <form
         key={params.toString()}
-        className="entity-search-form"
+        className="toolbar-surface mb-6"
         onSubmit={submit}
       >
-        <Field>
+        <Field className="min-w-56 flex-1">
           <FieldLabel htmlFor="entity-query">Name or identifier</FieldLabel>
           <Input
             id="entity-query"
@@ -211,7 +213,7 @@ export default function EntityWorkspace() {
             placeholder="Point72, an LEI, or a CUSIP"
           />
         </Field>
-        <Field>
+        <Field className="w-40">
           <FieldLabel htmlFor="search-type">Search by</FieldLabel>
           <Select name="type" defaultValue={type}>
             <SelectTrigger id="search-type" className="w-full">
@@ -224,7 +226,7 @@ export default function EntityWorkspace() {
             </SelectContent>
           </Select>
         </Field>
-        <Field>
+        <Field className="w-32">
           <FieldLabel htmlFor="country">Country hint</FieldLabel>
           <Input
             id="country"

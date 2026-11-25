@@ -185,7 +185,7 @@ def _scripted_model(monkeypatch):
         ]
     )
 
-    async def fake_call(_cfg, _messages, _tools, tool_choice=None):
+    async def fake_call(_cfg, _messages, _tools, tool_choice=None, session=None):
         return next(responses)
 
     async def fake_verify(_cfg, _question, _result, _transcript):
@@ -198,7 +198,7 @@ def _scripted_model(monkeypatch):
             verdict="supported",
         )
 
-    monkeypatch.setattr(orchestrator, "_call_openrouter", fake_call)
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call)
     monkeypatch.setattr(orchestrator, "verify_answer", fake_verify)
 
 
@@ -344,14 +344,14 @@ def test_the_8mb_failure_does_not_recur(monkeypatch):
         ]}}]},
     ])
 
-    async def fake_call(_cfg, messages, _tools, tool_choice=None):
+    async def fake_call(_cfg, messages, _tools, tool_choice=None, session=None):
         sent.append(list(messages))
         return next(responses)
 
     async def fake_verify(*_a):
         return Verification(status="verified", headline="Verified", detail="...")
 
-    monkeypatch.setattr(orchestrator, "_call_openrouter", fake_call)
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call)
     monkeypatch.setattr(orchestrator, "verify_answer", fake_verify)
 
     events: list[dict] = []
@@ -420,11 +420,11 @@ def _flaky_model(monkeypatch, failures: list[BaseException]):
     """The first calls raise `failures` in order; after that the scripted
     happy path from _scripted_model() runs. Returns the list of attempts."""
     _scripted_model(monkeypatch)
-    succeed = orchestrator._call_openrouter
+    succeed = orchestrator._call_model
     attempts: list[int] = []
     queue = list(failures)
 
-    async def flaky(cfg, messages, tools, tool_choice=None):
+    async def flaky(cfg, messages, tools, tool_choice=None, session=None):
         attempts.append(1)
         if queue:
             raise queue.pop(0)
@@ -433,7 +433,7 @@ def _flaky_model(monkeypatch, failures: list[BaseException]):
     async def no_wait(_seconds):
         return None
 
-    monkeypatch.setattr(orchestrator, "_call_openrouter", flaky)
+    monkeypatch.setattr(orchestrator, "_call_model", flaky)
     monkeypatch.setattr(orchestrator, "_backoff", no_wait)
     return attempts
 
@@ -477,7 +477,7 @@ def test_when_retries_run_out_the_error_says_who_failed_in_plain_words(monkeypat
 
     assert len(attempts) == 3
     message = str(raised.value)
-    assert message.startswith("The model provider (OpenRouter) failed 3 times in a row")
+    assert message.startswith("The model provider failed 3 times in a row")
     assert "usually temporary" in message
     # The raw transport error is kept for whoever debugs it.
     assert isinstance(raised.value.__cause__, httpx.RemoteProtocolError)

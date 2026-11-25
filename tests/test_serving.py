@@ -1,20 +1,24 @@
 import json
+import zipfile
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from er.config import load_config
 from er.entity.resolution import load_match_decisions, record_review
-from er.agent.tools import get_fund_structure, get_security
+from er.datasources.sec_adv.search import load_document
+from er.agent.tools import get_fund_structure, get_security, get_security_ownership
 from er.serving.publish import (
     adv_document_documents,
+    adv_pdf_documents,
     adv_page_documents,
     entity_documents,
     fund_series_documents,
     nport_fund_documents,
     security_documents,
+    security_ownership_documents,
 )
-from er.serving.store import ENTITIES, FUND_SERIES, SECURITIES, MemoryStore, OpenSearchStore
+from er.serving.store import ADV_PDFS, ENTITIES, FUND_SERIES, SECURITIES, SECURITY_OWNERSHIP, MemoryStore, OpenSearchStore
 
 
 def _write(path, rows):
@@ -130,13 +134,21 @@ def test_adv_documents_and_pages_become_serving_documents(tmp_path):
     _write(tmp_path / "sec_adv_documents.parquet", [document])
     _write(tmp_path / "sec_adv_pages.parquet", [page])
 
+    cfg.sec_adv.raw_dir = tmp_path
+    with zipfile.ZipFile(tmp_path / "archive.zip", "w") as archive:
+        archive.writestr("brochure.pdf", b"%PDF-1.7 brochure")
+
     ((document_id, published_document),) = list(adv_document_documents(cfg))
     ((page_id, published_page),) = list(adv_page_documents(cfg))
+    ((pdf_id, published_pdf),) = list(adv_pdf_documents(cfg))
 
     assert document_id == "abc:archive.zip:brochure.pdf"
     assert published_document["source_file"] == "archive.zip:brochure.pdf"
     assert page_id == "abc:1:archive.zip:brochure.pdf"
     assert published_page["text"] == page["text"]
+    # The API serves the PDF from the index alone, with no raw archive on disk.
+    (tmp_path / "archive.zip").unlink()
+    assert load_document(MemoryStore({ADV_PDFS: {pdf_id: published_pdf}}), "brochure.pdf") == b"%PDF-1.7 brochure"
 
 
 def test_nport_fund_document_is_the_latest_report_with_holdings_ranked_by_usd_value(tmp_path):
@@ -224,3 +236,38 @@ def test_security_lookup_resolves_one_share_class_and_flags_an_ambiguous_cusip(t
     assert match["securities"][0]["listing_count"] == 2
     assert ambiguous.data["matches"][0]["status"] == "ambiguous"
     assert "none of them can be named" in ambiguous.evidence[0].warnings[0]
+
+
+def test_security_ownership_compares_each_holder_with_its_previous_period(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.openfigi.processed_dir = tmp_path
+    row = {"cusip": "037833100", "name_of_issuer": "APPLE INC", "title_of_class": "COM", "put_call": None}
+    _write(tmp_path / "sec_13f_effective_holdings.parquet", [
+        {**row, "cik": "1", "accession_number": "a-q4", "period_of_report": "31-DEC-2025", "value_usd": 100, "shares_or_principal_amount": 10.0},
+        {**row, "cik": "2", "accession_number": "b-q4", "period_of_report": "31-DEC-2025", "value_usd": 50, "shares_or_principal_amount": 5.0},
+        {**row, "cik": "1", "accession_number": "a-q1", "period_of_report": "31-MAR-2026", "value_usd": 120, "shares_or_principal_amount": 8.0},
+        {**row, "cik": "1", "accession_number": "a-q1", "period_of_report": "31-MAR-2026", "value_usd": 30, "shares_or_principal_amount": 2.0},
+        {**row, "cik": "3", "accession_number": "c-q1", "period_of_report": "31-MAR-2026", "value_usd": 90, "shares_or_principal_amount": 6.0},
+        {**row, "cik": "3", "accession_number": "c-q1", "period_of_report": "31-MAR-2026", "value_usd": 999,
+         "shares_or_principal_amount": 99.0, "put_call": "CALL"},
+    ])
+    _write(tmp_path / "sec_13f_filings.parquet", [
+        {"cik": cik, "filer_name": name, "filing_date": "14-MAY-2026"} for cik, name in (("1", "Alpha"), ("2", "Beta"), ("3", "Gamma"))
+    ])
+    _write(tmp_path / "openfigi_mappings.parquet", [
+        {"cusip": "037833100", "ticker": "AAPL", "exchange_code": "US"},
+    ])
+    store = MemoryStore({SECURITY_OWNERSHIP: dict(security_ownership_documents(cfg))})
+
+    result = get_security_ownership(store, "aapl")
+
+    values = {fact.fact_id: fact.value for fact in result.facts}
+    data = result.data
+    assert (data["latest_period"], data["previous_period"]) == ("31-MAR-2026", "31-DEC-2025")
+    assert [values[p["holder_count_fact_id"]] for p in data["periods"]] == [2, 2]
+    alpha, gamma = data["holders"]
+    assert (alpha["filer_name"], values[alpha["value_fact_id"]]) == ("Alpha", 150)
+    assert values[alpha["shares_change_fact_id"]] == 0.0
+    # Gamma first reported this quarter, and its call option is not a position.
+    assert gamma["new_position"] and "shares_change_fact_id" not in gamma
+    assert values[gamma["value_fact_id"]] == 90

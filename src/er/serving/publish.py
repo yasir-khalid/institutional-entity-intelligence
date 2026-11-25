@@ -5,17 +5,23 @@ handful of lookups, never a join.
 
 Every selected index is staged and counted before one atomic alias transaction.
 Full publications have one generation across all serving indexes; --only is
-explicitly marked partial. Previous indexes are retained for rollback.
+explicitly marked partial. Previous indexes are retained for rollback unless
+serving.keep_previous_generation is off. Indexes listed in serving.packed are
+written into one physical index, so a small cluster needs fewer shards.
 Reviews and saved research metadata are never replaced by publication.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import fcntl
 import logging
+import zipfile
+from collections import Counter
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
+from itertools import groupby
 from pathlib import Path
 from uuid import uuid4
 
@@ -32,7 +38,13 @@ from er.knowledge.build import _openfigi_securities
 
 from .store import (
     ADV_DOCUMENTS,
+    ADV_FIRMS,
+    FAILS_TO_DELIVER,
+    FORM_D,
+    SECURITY_OWNERSHIP,
+    SHORT_VOLUME,
     ADV_PAGES,
+    ADV_PDFS,
     ENTITIES,
     FILERS,
     FUND_SERIES,
@@ -51,6 +63,7 @@ from .store import (
 logger = logging.getLogger(__name__)
 
 IDENTIFIERS_PER_TYPE = 200
+PACKED = "packed"
 CONNECTION_TYPES = ("BANK_CONTROL_PARENT", "BENEFICIAL_OWNER", "SIGNIFICANT_CONTROL", "INSIDER_OF", "SUCCEEDED_BY")
 
 _KEYWORD = {"type": "keyword"}
@@ -124,6 +137,7 @@ MAPPINGS = {
         "source_file": _KEYWORD,
         "snapshot_date": _KEYWORD,
     },
+    ADV_PDFS: {"pdf_file_name": _KEYWORD, "content_hash": _KEYWORD, "content": {"type": "binary"}},
     XBRL_FACTS: {
         "cik": _KEYWORD,
         "tag": _KEYWORD,
@@ -137,6 +151,46 @@ MAPPINGS = {
         "tickers": _KEYWORD,
         "former_names": _KEYWORD,
     },
+    ADV_FIRMS: {
+        "crd_number": _KEYWORD,
+        "names": {"type": "text"},
+        "lei": _KEYWORD,
+        "cik": _KEYWORD,
+        "thirteen_f_cik": _KEYWORD,
+        "state": _KEYWORD,
+        "firm_type": _KEYWORD,
+        "fund_types": _KEYWORD,
+        "raum": {"type": "double"},
+        "private_fund_gross_assets": {"type": "double"},
+        "history": _STORED_ONLY,
+        "client_types": _STORED_ONLY,
+    },
+    FORM_D: {
+        "accession_number": _KEYWORD,
+        "issuer_cik": _KEYWORD,
+        "issuer_name": {"type": "text"},
+        "people_names": {"type": "text"},
+        "recipient_names": {"type": "text"},
+        "filing_date": _KEYWORD,
+        "industry_group": _KEYWORD,
+        "fund_type": _KEYWORD,
+        "is_fund": {"type": "boolean"},
+        "is_amendment": {"type": "boolean"},
+        "state": _KEYWORD,
+        "total_sold": {"type": "double"},
+        "people": _STORED_ONLY,
+        "recipients": _STORED_ONLY,
+    },
+    SECURITY_OWNERSHIP: {
+        "cusip": _KEYWORD,
+        "tickers": _KEYWORD,
+        "issuer_name": {"type": "text"},
+        "holder_count": {"type": "integer"},
+        "periods": _STORED_ONLY,
+        "holders": _STORED_ONLY,
+    },
+    SHORT_VOLUME: {"symbol": _KEYWORD, "days": _STORED_ONLY},
+    FAILS_TO_DELIVER: {"cusip": _KEYWORD, "symbol": _KEYWORD, "fails": _STORED_ONLY},
 }
 
 
@@ -559,9 +613,14 @@ def relationship_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
     path = cfg.gleif.processed_dir / "gleif_relationships.parquet"
     if not path.exists():
         return
+    # GLEIF can list one pair more than once (an ended period, then a current
+    # one); the tree reads one edge per pair, so keep the active, newest one.
     for row in _rows(f"""
         SELECT start_node_id, end_node_id, relationship_type, relationship_status, start_date, end_date
         FROM read_parquet('{path}')
+        QUALIFY row_number() OVER (
+            PARTITION BY start_node_id, end_node_id, relationship_type
+            ORDER BY relationship_status = 'ACTIVE' DESC, start_date DESC NULLS LAST) = 1
     """, batch_size=50_000):
         yield f"{row['start_node_id']}:{row['end_node_id']}:{row['relationship_type']}", row
 
@@ -588,6 +647,31 @@ def adv_page_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
         return
     for row in _rows(f"SELECT * EXCLUDE (ingested_at) FROM read_parquet('{path}')"):
         yield f"{row['content_hash']}:{row['page_number']}:{row['source_file']}", row
+
+
+def adv_pdf_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """The brochure PDFs themselves, read from the SEC monthly ZIPs the pages
+    were extracted from, so the API can serve one without the raw files."""
+    path = cfg.sec_adv.processed_dir / "sec_adv_documents.parquet"
+    if not path.exists():
+        return
+    rows = _rows(f"""
+        SELECT pdf_file_name, arg_max(content_hash, snapshot_date) AS content_hash,
+               arg_max(source_file, snapshot_date) AS source_file
+        FROM read_parquet('{path}') GROUP BY pdf_file_name ORDER BY source_file
+    """)
+    for archive_name, group in groupby(rows, key=lambda row: row["source_file"].partition(":")[0]):
+        archive_path = cfg.sec_adv.raw_dir / archive_name
+        if not archive_path.is_file():
+            continue
+        with zipfile.ZipFile(archive_path) as archive:
+            members = set(archive.namelist())
+            for row in group:
+                member = row["source_file"].partition(":")[2]
+                if member in members:
+                    content = base64.b64encode(archive.read(member)).decode("ascii")
+                    yield row["pdf_file_name"], {"pdf_file_name": row["pdf_file_name"],
+                                                 "content_hash": row["content_hash"], "content": content}
 
 
 def xbrl_fact_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
@@ -638,6 +722,238 @@ def decision_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
                         "decided_on": row.get("snapshot_date")}
 
 
+FUND_TYPES = {
+    "hedge_fund_count": "Hedge fund",
+    "pe_fund_count": "Private equity",
+    "vc_fund_count": "Venture capital",
+    "real_estate_fund_count": "Real estate",
+    "securitized_fund_count": "Securitized asset",
+    "liquidity_fund_count": "Liquidity",
+    "other_fund_count": "Other private fund",
+}
+
+
+def adv_firm_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per adviser CRD: its latest Form ADV Part 1A answers, every snapshot's
+    RAUM (the AUM history), the latest client-type breakdown, and the links
+    the filings themselves state - its LEI (Item 1.P) and the 13F filer CIK
+    whose cover page names this CRD."""
+    processed = cfg.sec_adv_firms.processed_dir
+    firms = processed / "sec_adv_firms.parquet"
+    clients = processed / "sec_adv_client_types.parquet"
+    filings = cfg.sec_13f.processed_dir / "sec_13f_filings.parquet"
+    gleif = cfg.gleif.processed_dir / "gleif_entities.parquet"
+    if not firms.exists():
+        return
+    thirteen_f = (
+        f"""SELECT ltrim(crd_number, '0') AS crd_number,
+                   arg_max(cik, strptime(filing_date, '%d-%b-%Y')) AS thirteen_f_cik
+            FROM read_parquet('{filings}') WHERE crd_number IS NOT NULL GROUP BY 1"""
+        if filings.exists() else "SELECT NULL::VARCHAR AS crd_number, NULL::VARCHAR AS thirteen_f_cik WHERE false"
+    )
+    entities = (
+        f"SELECT lei, legal_name AS lei_name FROM read_parquet('{gleif}')"
+        if gleif.exists() else "SELECT NULL::VARCHAR AS lei, NULL::VARCHAR AS lei_name WHERE false"
+    )
+    client_rows = (
+        f"""SELECT c.crd_number, list(struct_pack(client_type := c.client_type, client_count := c.client_count,
+                                                  fewer_than_five := c.fewer_than_five, raum := c.raum)
+                                      ORDER BY c.raum DESC NULLS LAST, c.client_count DESC NULLS LAST) AS client_types
+            FROM read_parquet('{clients}') c JOIN latest l USING (crd_number, snapshot_date) GROUP BY 1"""
+        if clients.exists() else "SELECT NULL::VARCHAR AS crd_number, [] AS client_types WHERE false"
+    )
+    fund_types = ", ".join(f"CASE WHEN {column} > 0 THEN '{label}' END" for column, label in FUND_TYPES.items())
+    for row in _rows(f"""
+        WITH latest AS (
+            SELECT * EXCLUDE (row_no) FROM (
+                SELECT *, row_number() OVER (PARTITION BY crd_number ORDER BY snapshot_date DESC) AS row_no
+                FROM read_parquet('{firms}')
+            ) WHERE row_no = 1
+        ),
+        history AS (
+            SELECT crd_number, list(struct_pack(snapshot_date, raum, raum_discretionary, accounts, employees,
+                                                private_fund_count, private_fund_gross_assets, source_file)
+                                    ORDER BY snapshot_date) AS history
+            FROM read_parquet('{firms}') GROUP BY crd_number
+        ),
+        clients AS ({client_rows}),
+        thirteen_f AS ({thirteen_f}),
+        entities AS ({entities})
+        SELECT l.* EXCLUDE (ingested_at), h.history, coalesce(c.client_types, []) AS client_types,
+               t.thirteen_f_cik, e.lei_name,
+               list_filter([l.business_name, l.legal_name], x -> x IS NOT NULL) AS names,
+               list_filter([{fund_types}], x -> x IS NOT NULL) AS fund_types
+        FROM latest l
+        JOIN history h USING (crd_number)
+        LEFT JOIN clients c USING (crd_number)
+        LEFT JOIN thirteen_f t USING (crd_number)
+        LEFT JOIN entities e USING (lei)
+    """):
+        yield row["crd_number"], row
+
+
+def form_d_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per Form D filing: the offering, its related persons and its
+    sales-compensation recipients - so a feed row and its detail page are one
+    read."""
+    processed = cfg.sec_form_d.processed_dir
+    offerings = processed / "sec_form_d_offerings.parquet"
+    people = processed / "sec_form_d_people.parquet"
+    recipients = processed / "sec_form_d_recipients.parquet"
+    if not offerings.exists():
+        return
+    for row in _rows(f"""
+        WITH people AS (
+            SELECT accession_number, list(struct_pack(name, city, state, relationships, clarification)
+                                          ORDER BY person_index) AS people
+            FROM read_parquet('{people}') GROUP BY 1
+        ),
+        recipients AS (
+            SELECT accession_number, list(struct_pack(name, crd_number, broker_dealer_name, broker_dealer_crd,
+                                                      states, foreign_solicitation)
+                                          ORDER BY recipient_index) AS recipients
+            FROM read_parquet('{recipients}') GROUP BY 1
+        )
+        SELECT o.* EXCLUDE (ingested_at), coalesce(p.people, []) AS people, coalesce(r.recipients, []) AS recipients,
+               array_to_string(list_transform(coalesce(p.people, []), x -> x.name), ' | ') AS people_names,
+               array_to_string(list_transform(coalesce(r.recipients, []), x -> x.name), ' | ') AS recipient_names
+        FROM read_parquet('{offerings}') o
+        LEFT JOIN people p USING (accession_number)
+        LEFT JOIN recipients r USING (accession_number)
+    """):
+        yield row["accession_number"], row
+
+
+def security_ownership_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    """Per CUSIP: every 13F report period's holder count, total value and
+    shares (long positions only), and the largest holders in the latest period
+    beside what each reported for the period before. Changes are left to the
+    readers' registered formulas. Only report periods at least half of all
+    filers report are kept, so a late filing for an old quarter is not a period."""
+    processed = cfg.sec_13f.processed_dir
+    effective = processed / "sec_13f_effective_holdings.parquet"
+    filings = processed / "sec_13f_filings.parquet"
+    crosswalk = processed / "crosswalk_sec_13f_gleif.parquet"
+    figi = cfg.openfigi.processed_dir / "openfigi_mappings.parquet"
+    if not (effective.exists() and filings.exists()):
+        return
+    tickers = (
+        f"""SELECT cusip, list(DISTINCT upper(ticker)) FILTER (WHERE ticker IS NOT NULL) AS tickers
+            FROM read_parquet('{figi}') WHERE exchange_code = 'US' GROUP BY cusip"""
+        if figi.exists() else "SELECT NULL::VARCHAR AS cusip, []::VARCHAR[] AS tickers WHERE false"
+    )
+    leis = (
+        f"SELECT cik, lei FROM read_parquet('{crosswalk}') WHERE decision IN ('AUTO_MATCH', 'REVIEW')"
+        if crosswalk.exists() else "SELECT NULL::VARCHAR AS cik, NULL::VARCHAR AS lei WHERE false"
+    )
+    for row in _rows(f"""
+        WITH covered AS (
+            -- The filing windows ingested also carry a few late filings for
+            -- old quarters; only periods most filers report are compared.
+            SELECT period_of_report FROM (
+                SELECT period_of_report, count(DISTINCT cik) AS filers
+                FROM read_parquet('{effective}') GROUP BY 1
+            ) QUALIFY filers >= 0.5 * max(filers) OVER ()
+        ),
+        positions AS (
+            SELECT cusip, cik, period_of_report, strptime(period_of_report, '%d-%b-%Y')::DATE AS period_date,
+                   any_value(name_of_issuer) AS name_of_issuer, any_value(title_of_class) AS title_of_class,
+                   sum(value_usd)::BIGINT AS value_usd, sum(shares_or_principal_amount) AS shares,
+                   any_value(accession_number) AS accession_number
+            FROM read_parquet('{effective}')
+            WHERE put_call IS NULL AND cusip IS NOT NULL AND period_of_report IN (SELECT period_of_report FROM covered)
+            GROUP BY cusip, cik, period_of_report
+        ),
+        ranked_periods AS (
+            SELECT cusip, period_of_report, period_date,
+                   dense_rank() OVER (PARTITION BY cusip ORDER BY period_date DESC) AS period_rank
+            FROM (SELECT DISTINCT cusip, period_of_report, period_date FROM positions)
+        ),
+        periods AS (
+            SELECT p.cusip, list(struct_pack(period_of_report := p.period_of_report,
+                                             period_date := strftime(p.period_date, '%Y-%m-%d'),
+                                             holder_count := p.holder_count, value_usd := p.value_usd,
+                                             shares := p.shares) ORDER BY p.period_date) AS periods
+            FROM (SELECT cusip, period_of_report, period_date, count(*) AS holder_count,
+                         sum(value_usd)::BIGINT AS value_usd, sum(shares) AS shares
+                  FROM positions GROUP BY ALL) p
+            GROUP BY p.cusip
+        ),
+        latest AS (
+            SELECT p.*, r.period_rank FROM positions p JOIN ranked_periods r USING (cusip, period_of_report)
+            WHERE r.period_rank <= 2
+        ),
+        names AS (
+            SELECT cik, arg_max(filer_name, strptime(filing_date, '%d-%b-%Y')) AS filer_name
+            FROM read_parquet('{filings}') GROUP BY cik
+        ),
+        holders AS (
+            SELECT cusip, list(struct_pack(cik := cik, filer_name := filer_name, lei := lei,
+                                           value_usd := value_usd, shares := shares,
+                                           accession_number := accession_number,
+                                           previous_value_usd := previous_value_usd,
+                                           previous_shares := previous_shares,
+                                           previous_accession_number := previous_accession_number)
+                               ORDER BY value_usd DESC NULLS LAST) AS holders
+            FROM (
+                SELECT c.cusip, c.cik, n.filer_name, x.lei, c.value_usd, c.shares, c.accession_number,
+                       p.value_usd AS previous_value_usd, p.shares AS previous_shares,
+                       p.accession_number AS previous_accession_number,
+                       row_number() OVER (PARTITION BY c.cusip ORDER BY c.value_usd DESC NULLS LAST) AS holder_rank
+                FROM latest c
+                LEFT JOIN latest p ON p.cusip = c.cusip AND p.cik = c.cik AND p.period_rank = 2
+                LEFT JOIN names n ON n.cik = c.cik
+                LEFT JOIN ({leis}) x ON x.cik = c.cik
+                WHERE c.period_rank = 1
+            ) WHERE holder_rank <= {cfg.serving.holders_per_security}
+            GROUP BY cusip
+        ),
+        issuers AS (
+            SELECT cusip, arg_max(name_of_issuer, period_date) AS issuer_name,
+                   arg_max(title_of_class, period_date) AS title_of_class
+            FROM positions GROUP BY cusip
+        ),
+        current AS (
+            SELECT cusip, period_of_report AS latest_period, count(*) AS holder_count
+            FROM latest WHERE period_rank = 1 GROUP BY ALL
+        ),
+        previous AS (SELECT DISTINCT cusip, period_of_report AS previous_period FROM latest WHERE period_rank = 2)
+        SELECT i.cusip, i.issuer_name, i.title_of_class, coalesce(t.tickers, []) AS tickers,
+               c.latest_period, v.previous_period, c.holder_count, p.periods, coalesce(h.holders, []) AS holders
+        FROM issuers i
+        JOIN current c USING (cusip)
+        JOIN periods p USING (cusip)
+        LEFT JOIN previous v USING (cusip)
+        LEFT JOIN holders h USING (cusip)
+        LEFT JOIN ({tickers}) t USING (cusip)
+    """, batch_size=2_000):
+        yield row["cusip"], row
+
+
+def short_volume_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    path = cfg.finra_short_volume.processed_dir / "finra_short_volume.parquet"
+    if not path.exists():
+        return
+    for row in _rows(f"""
+        SELECT symbol, list(struct_pack(trade_date, short_volume, short_exempt_volume, total_volume, source_file)
+                            ORDER BY trade_date) AS days
+        FROM read_parquet('{path}') GROUP BY symbol
+    """):
+        yield row["symbol"], row
+
+
+def fails_documents(cfg: AppConfig) -> Iterator[tuple[str, dict]]:
+    path = cfg.sec_ftd.processed_dir / "sec_ftd.parquet"
+    if not path.exists():
+        return
+    for row in _rows(f"""
+        SELECT cusip, arg_max(symbol, settlement_date) AS symbol, arg_max(description, settlement_date) AS description,
+               list(struct_pack(settlement_date, quantity, price, source_file) ORDER BY settlement_date) AS fails
+        FROM read_parquet('{path}') GROUP BY cusip
+    """):
+        yield row["cusip"], row
+
+
 BUILDERS: dict[str, Callable[[AppConfig], Iterator[tuple[str, dict]]]] = {
     ENTITIES: entity_documents,
     FILERS: filer_documents,
@@ -649,9 +965,15 @@ BUILDERS: dict[str, Callable[[AppConfig], Iterator[tuple[str, dict]]]] = {
     OWNERSHIP: ownership_documents,
     ADV_DOCUMENTS: adv_document_documents,
     ADV_PAGES: adv_page_documents,
+    ADV_PDFS: adv_pdf_documents,
     XBRL_FACTS: xbrl_fact_documents,
     XBRL_ISSUERS: xbrl_issuer_documents,
     DECISIONS: decision_documents,
+    ADV_FIRMS: adv_firm_documents,
+    FORM_D: form_d_documents,
+    SECURITY_OWNERSHIP: security_ownership_documents,
+    SHORT_VOLUME: short_volume_documents,
+    FAILS_TO_DELIVER: fails_documents,
 }
 
 
@@ -662,15 +984,40 @@ def _has_column(path, column: str) -> bool:
     return column in names
 
 
+def _units(cfg: AppConfig, names: list[str]) -> list[str]:
+    """The physical indexes behind these serving names: packed ones share one."""
+    packed = set(cfg.serving.packed)
+    return list(dict.fromkeys(PACKED if name in packed else name for name in names))
+
+
+def _mapping(cfg: AppConfig, unit: str) -> dict:
+    if unit != PACKED:
+        return MAPPINGS[unit]
+    merged = {"serving_kind": _KEYWORD}
+    for name in cfg.serving.packed:
+        for field, spec in MAPPINGS[name].items():
+            if merged.setdefault(field, spec) != spec:
+                raise ValueError(f"{name} maps {field!r} differently from another packed index; leave it unpacked")
+    return merged
+
+
+def _documents(cfg: AppConfig, unit: str, counts: Counter) -> Iterator[tuple[str, dict]]:
+    names = cfg.serving.packed if unit == PACKED else [unit]
+    for name in names:
+        for doc_id, doc in BUILDERS[name](cfg):
+            counts[name] += 1
+            yield (f"{name}:{doc_id}", {**doc, "serving_kind": name}) if unit == PACKED else (doc_id, doc)
+
+
 def _stage_index(client: OpenSearch, cfg: AppConfig, name: str, generation: str,
-                 documents: Iterator[tuple[str, dict]]) -> tuple[str, int]:
+                 documents: Iterator[tuple[str, dict]], mapping: dict) -> tuple[str, int]:
     alias = f"{cfg.serving.prefix}_{name}"
     index = f"{alias}_{generation}"
     client.indices.create(
         index=index,
         body={
             "settings": {"number_of_shards": 1, "number_of_replicas": 0, "refresh_interval": "-1"},
-            "mappings": {"dynamic": False, "properties": MAPPINGS[name], "_meta": {"generation": generation}},
+            "mappings": {"dynamic": False, "properties": mapping, "_meta": {"generation": generation}},
         },
     )
     actions = (
@@ -709,10 +1056,14 @@ def _aliases(client: OpenSearch, cfg: AppConfig, names: list[str]) -> dict[str, 
             if client.indices.exists_alias(name=f"{cfg.serving.prefix}_{name}") else [] for name in names}
 
 
-def _switch(client: OpenSearch, cfg: AppConfig, previous: dict[str, list[str]], indexes: dict[str, dict]) -> None:
+def _switch(client: OpenSearch, cfg: AppConfig, previous: dict[str, list[str]], indexes: dict[str, dict],
+            retired: dict[str, list[str]] | None = None) -> None:
+    """`retired` names aliases a packed index now replaces; they are dropped in
+    the same transaction so a reader never sees both layouts."""
     if _aliases(client, cfg, list(indexes)) != previous:
         raise RuntimeError("Serving aliases changed during publication. Retry from the current generation.")
-    actions = []
+    actions = [{"remove": {"index": old, "alias": f"{cfg.serving.prefix}_{name}", "must_exist": True}}
+               for name, olds in (retired or {}).items() for old in olds]
     for name, entry in indexes.items():
         alias = f"{cfg.serving.prefix}_{name}"
         actions.extend({"remove": {"index": old, "alias": alias, "must_exist": True}}
@@ -728,7 +1079,8 @@ def _inputs(cfg: AppConfig) -> dict[str, tuple[int, int]]:
     directories = {cfg.entity.processed_dir, *(getattr(cfg, source).processed_dir
                    for source in ("gleif", "sec_13f", "sec_submissions", "sec_series_class", "openfigi",
                                   "nport", "sec_insiders", "sec_adv", "companies_house", "sec_13dg",
-                                  "ffiec_nic", "sec_xbrl"))}
+                                  "ffiec_nic", "sec_xbrl", "sec_adv_firms", "sec_form_d",
+                                  "finra_short_volume", "sec_ftd"))}
     return {str(path): (path.stat().st_size, path.stat().st_mtime_ns)
             for directory in directories for path in directory.glob("*.parquet")}
 
@@ -745,7 +1097,7 @@ def _rollback(cfg: AppConfig, generation: str) -> dict[str, int]:
     doc = _manifest(path)
     if doc.get("partial"):
         raise ValueError("Rollback requires a complete publication generation")
-    if doc.get("generation") != generation or set(doc["indexes"]) != {*BUILDERS, COVERAGE}:
+    if doc.get("generation") != generation or set(doc["indexes"]) != {*_units(cfg, list(BUILDERS)), COVERAGE}:
         raise ValueError("Publication manifest does not describe a complete generation")
     if any(entry["index"] != f"{cfg.serving.prefix}_{name}_{generation}"
            for name, entry in doc["indexes"].items()):
@@ -772,6 +1124,7 @@ def run_all(cfg: AppConfig, only: list[str] | None = None) -> dict[str, int]:
     names = list(BUILDERS) if not only else list(dict.fromkeys(only))
     if not names or any(name not in BUILDERS for name in names):
         raise ValueError("Select at least one known serving index")
+    units = _units(cfg, names)
     directory = cfg.entity.processed_dir / "serving_publications"
     directory.mkdir(parents=True, exist_ok=True)
     # Serialize publishers using the same build directory. Conditional alias
@@ -780,11 +1133,13 @@ def run_all(cfg: AppConfig, only: list[str] | None = None) -> dict[str, int]:
         fcntl.flock(lock, fcntl.LOCK_EX)
         client = get_client(cfg)
         generation = uuid4().hex
-        previous = _aliases(client, cfg, names + [COVERAGE])
+        previous = _aliases(client, cfg, units + [COVERAGE])
+        retired = ({name: olds for name, olds in _aliases(client, cfg, cfg.serving.packed).items() if olds}
+                   if PACKED in units else {})
         inputs = _inputs(cfg)
         doc = {**build_coverage(cfg), "generation": generation,
                "published_at": datetime.now(timezone.utc).isoformat(),
-               "partial": len(names) != len(BUILDERS), "previous_generation": None, "indexes": {}}
+               "partial": set(units) != set(_units(cfg, list(BUILDERS))), "previous_generation": None, "indexes": {}}
         # Previous source profiles come from the build-time manifest, never
         # from a serving document treated as the system of record.
         if previous[COVERAGE]:
@@ -799,14 +1154,18 @@ def run_all(cfg: AppConfig, only: list[str] | None = None) -> dict[str, int]:
                     source["schema_changed"] = bool(old.get("tables")) and (
                         [(t["name"], t["schema"]) for t in source["tables"]] !=
                         [(t["name"], t["schema"]) for t in old.get("tables", [])])
+        counts: Counter = Counter()
         staged = []
         try:
-            for name in names:
-                index, count = _stage_index(client, cfg, name, generation, BUILDERS[name](cfg))
+            for unit in units:
+                index, count = _stage_index(client, cfg, unit, generation, _documents(cfg, unit, counts),
+                                            _mapping(cfg, unit))
                 staged.append(index)
-                doc["indexes"][name] = {"index": index, "count": count}
+                doc["indexes"][unit] = {"index": index, "count": count}
+            doc["documents"] = dict(counts)
             doc["indexes"][COVERAGE] = {"index": f"{cfg.serving.prefix}_{COVERAGE}_{generation}", "count": 1}
-            coverage_index, _ = _stage_index(client, cfg, COVERAGE, generation, iter([("current", doc)]))
+            coverage_index, _ = _stage_index(client, cfg, COVERAGE, generation, iter([("current", doc)]),
+                                             MAPPINGS[COVERAGE])
             staged.append(coverage_index)
             if _inputs(cfg) != inputs:
                 raise RuntimeError("Processed inputs changed during publication; aliases were not changed. Retry after the build finishes.")
@@ -818,6 +1177,12 @@ def run_all(cfg: AppConfig, only: list[str] | None = None) -> dict[str, int]:
             raise
         # An ambiguous transport failure here must leave staged indexes intact:
         # the alias transaction may already have committed on the server.
-        _switch(client, cfg, previous, doc["indexes"])
-        logger.info("Published generation %s; previous indexes retained for rollback", generation)
-        return {name: entry["count"] for name, entry in doc["indexes"].items() if name != COVERAGE}
+        _switch(client, cfg, previous, doc["indexes"], retired)
+        if cfg.serving.keep_previous_generation:
+            logger.info("Published generation %s; previous indexes retained for rollback", generation)
+        else:
+            superseded = [old for olds in (*previous.values(), *retired.values()) for old in olds]
+            for old in superseded:
+                client.indices.delete(index=old, ignore_unavailable=True)
+            logger.info("Published generation %s; deleted %d superseded indexes", generation, len(superseded))
+        return dict(counts)

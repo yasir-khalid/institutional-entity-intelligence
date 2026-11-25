@@ -1,54 +1,45 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
-import Link from "next/link";
+import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowUp, MessageSquare, Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Loading, LoadError, NoData } from "@/components/WorkspaceStates";
-import { useResource } from "@/hooks/use-resource";
-import { useDeveloperView } from "@/hooks/use-developer-view";
+import { ArrowUp, ArrowUpRight, ShieldCheck } from "lucide-react";
+import { LoadError } from "@/components/WorkspaceStates";
 import {
   workspaceMutation,
   type Investigation,
-  type InvestigationSummary,
 } from "@/lib/api";
+
+const EXAMPLES = [
+  "Who are the largest 13F holders of NVDA and how did their positions change last quarter?",
+  "What was Point72’s latest reported holding in Apple?",
+  "Which venture capital funds raised the most in the last 7 days of Form D filings?",
+  "Who ultimately manages Albacore Partners I Master Fund?",
+];
 
 export default function ResearchHome() {
   const router = useRouter();
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [offset, setOffset] = useState(0);
-  const [trace, setTrace] = useDeveloperView();
-  const operation = useRef<
-    { question: string; id: string; trace: boolean } | undefined
-  >(undefined);
-  const saved = useResource<{
-    items: InvestigationSummary[];
-    next_offset: number | null;
-  }>(`/api/investigations?limit=50&offset=${offset}`);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const operation = useRef<{ question: string; id: string } | undefined>(
+    undefined,
+  );
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!question.trim() || busy) return;
     setBusy(true);
     setError(undefined);
-    if (
-      operation.current?.question !== question.trim() ||
-      operation.current.trace !== trace
-    )
+    if (operation.current?.question !== question.trim())
       operation.current = {
         question: question.trim(),
         id: crypto.randomUUID(),
-        trace,
       };
     try {
       const doc = await workspaceMutation<Investigation>(
         "/api/investigations",
-        { question: question.trim(), request_id: operation.current.id, trace },
+        { question: question.trim(), request_id: operation.current.id },
       );
       router.push(`/research/${doc.id}`);
     } catch (reason) {
@@ -59,132 +50,82 @@ export default function ResearchHome() {
       setBusy(false);
     }
   }
+
+  function suggest(text: string) {
+    setQuestion(text);
+    input.current?.focus();
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
   return (
-    <div className="workspace-page research-home">
-      <div className="workspace-heading">
-        <p>Institutional intelligence</p>
-        <h1>What do you want to investigate?</h1>
-        <span>
-          Resolve identities, trace relationships, and inspect reported
-          activity—with evidence attached.
-        </span>
-      </div>
-      <form onSubmit={submit} className="research-launcher">
-        <Field>
-          <FieldLabel htmlFor="question">Research question</FieldLabel>
-          <div className="flex gap-2">
-            <Input
-              id="question"
-              maxLength={4000}
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder="What was Point72’s latest reported holding in Apple?"
-              required
-            />
-            <Button
+    <div className="chat-home">
+      <div className="chat-home-inner">
+        <h1 className="chat-home-title">What do you want to investigate?</h1>
+
+        <form className="chat-composer chat-composer-home" onSubmit={submit}>
+          <textarea
+            ref={input}
+            id="question"
+            aria-label="Research question"
+            maxLength={4000}
+            rows={2}
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Ask a question about an institution…"
+            required
+          />
+          <div className="chat-composer-foot">
+            <span className="chat-hint">
+              Enter to send · Shift + Enter for a new line
+            </span>
+            <button
+              className="chat-send"
               disabled={busy || !question.trim()}
               type="submit"
               aria-label="Start investigation"
             >
               <ArrowUp />
-            </Button>
+            </button>
           </div>
-          <FieldDescription>
-            Saved on the server. You can leave this page and return while
-            research continues.
-          </FieldDescription>
-        </Field>
-      </form>
-      <label className="workspace-note flex items-center gap-2">
-        <input
-          type="checkbox"
-          checked={trace}
-          onChange={(event) => setTrace(event.target.checked)}
-        />{" "}
-        Collect developer trace for this question
-      </label>
-      {error && <LoadError error={error} retry={() => setError(undefined)} />}
-      <div className="research-suggestions">
-        {[
-          "Who ultimately manages Albacore Partners I Master Fund?",
-          "What is Fred Alger Management’s registration status?",
-          "What was Point72’s latest reported holding in Apple?",
-        ].map((text) => (
-          <Button
-            key={text}
-            variant="outline"
-            onClick={() => setQuestion(text)}
-          >
-            {text}
-          </Button>
-        ))}
-      </div>
-      <Link className="workspace-text-link" href="/entities">
-        <Search size={15} /> Just looking for an entity? Search the registers
-      </Link>
-      <section className="workspace-section">
-        <div className="workspace-section-heading">
-          <h2>
-            <MessageSquare size={16} /> Saved investigations
-          </h2>
-          <span>Shared workspace · newest first</span>
-        </div>
-        {saved.error ? (
-          <LoadError error={saved.error} retry={saved.refresh} />
-        ) : !saved.data ? (
-          <Loading />
-        ) : saved.data.items.length === 0 ? (
-          <NoData
-            title="A place for your research"
-            description="Your first investigation will appear here with its answer, citations, and progress preserved."
-          />
-        ) : (
-          <ul className="investigation-list">
-            {saved.data.items.map((item) => (
-              <li key={item.id}>
-                <Link href={`/research/${item.id}`}>
-                  <span>
-                    {item.title}
-                    <small>
-                      {new Date(item.updated_at).toLocaleDateString()}
-                    </small>
-                  </span>
-                  <Badge
-                    variant={
-                      item.status === "failed" ? "destructive" : "secondary"
-                    }
-                  >
-                    {item.status === "succeeded" ? "Complete" : item.status}
-                  </Badge>
-                </Link>
-              </li>
-            ))}
-          </ul>
+        </form>
+
+        {error && (
+          <div className="chat-home-error">
+            <LoadError error={error} retry={() => setError(undefined)} />
+          </div>
         )}
-        <nav
-          className="workspace-actions"
-          aria-label="Investigation pagination"
-        >
-          {offset > 0 && (
-            <Button
-              variant="outline"
-              onClick={() => setOffset((value) => Math.max(0, value - 50))}
-            >
-              Newer
-            </Button>
-          )}
-          {saved.data?.next_offset !== undefined &&
-            saved.data.next_offset !== null &&
-            saved.data.next_offset <= 9000 && (
-              <Button
-                variant="outline"
-                onClick={() => setOffset(saved.data!.next_offset!)}
+
+        <div className="chat-suggestions" aria-label="Sample questions">
+          <p className="chat-suggestions-label">Sample questions</p>
+          <div className="chat-suggestion-grid">
+            {EXAMPLES.map((question) => (
+              <button
+                key={question}
+                type="button"
+                className="chat-question"
+                title={question}
+                onClick={() => suggest(question)}
               >
-                Older
-              </Button>
-            )}
-        </nav>
-      </section>
+                <span>{question}</span>
+                <ArrowUpRight aria-hidden />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <p className="chat-footnote">
+          <ShieldCheck aria-hidden />
+          Answers use GLEIF and SEC records; every figure is cited. Agents can
+          make mistakes — check the sources.
+        </p>
+      </div>
     </div>
   );
 }

@@ -15,7 +15,6 @@ dependencies = [
     "pyyaml>=6.0",
     "duckdb>=1.5.5",
     "jellyfish>=1.2.1",
-    "postal>=1.1.11",
     "rich>=15.0.0",
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.4",
@@ -26,6 +25,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# libpostal address parsing is used only by GLEIF ingestion; it needs the
+# native library, so the API (and its Vercel build) installs without it.
+ingest = [
+    "postal>=1.1.11",
+]
 dev = [
     "pytest>=8.2",
 ]

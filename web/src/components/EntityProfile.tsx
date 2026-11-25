@@ -70,6 +70,14 @@ const SOURCE_LABELS: Record<string, string> = {
   human_review: "Human review",
   nport: "N-PORT",
   gleif_registration_id: "GLEIF registration ID",
+  gleif_mapping: "GLEIF mapping",
+  gleif_isin_bridge: "GLEIF ISIN map",
+  sec_13f: "13F",
+  sec_adv_firms: "Form ADV",
+  companies_house: "Companies House",
+  openfigi: "OpenFIGI",
+  sec_series_class: "SEC series",
+  sec_submissions: "EDGAR",
 };
 
 function sourceLabel(source: string): string {
@@ -205,33 +213,41 @@ export function DecisionCard({ decision, onOpenEntity }: { decision: MatchDecisi
         </span>
       </header>
 
-      <dl className="decision-grid">
-        <dt>Score</dt><dd>{decision.score?.toFixed(1) ?? "—"}</dd>
-        <dt>Gap to runner-up</dt><dd>{decision.gap?.toFixed(1) ?? "—"}</dd>
-        <dt>Runner-up</dt>
-        <dd>
-          {decision.runner_up_lei ? (
-            <button type="button" className="profile-link" onClick={() => onOpenEntity(decision.runner_up_lei!)}>
-              {decision.runner_up_name ?? decision.runner_up_lei}
-            </button>
-          ) : "—"}
-          {decision.runner_up_score !== null && <small> · {decision.runner_up_score.toFixed(1)}</small>}
-        </dd>
-        <dt>Config</dt><dd><code>{decision.config_hash ?? "—"}</code>{decision.decided_on && <small> · {decision.decided_on}</small>}</dd>
-      </dl>
-      {decision.reason && <p className="decision-reason">{decision.reason}</p>}
+      <div className="decision-body">
+        <dl className="decision-grid">
+          <dt>Proposed LEI</dt>
+          <dd>
+            {decision.lei ? (
+              <button type="button" className="profile-link" onClick={() => onOpenEntity(decision.lei!)}>{decision.lei}</button>
+            ) : "None"}
+          </dd>
+          <dt>Score</dt><dd>{decision.score?.toFixed(1) ?? "—"}</dd>
+          <dt>Gap to runner-up</dt><dd>{decision.gap?.toFixed(1) ?? "—"}</dd>
+          <dt>Runner-up</dt>
+          <dd>
+            {decision.runner_up_lei ? (
+              <button type="button" className="profile-link" onClick={() => onOpenEntity(decision.runner_up_lei!)}>
+                {decision.runner_up_name ?? decision.runner_up_lei}
+              </button>
+            ) : "—"}
+            {decision.runner_up_score !== null && <small> · {decision.runner_up_score.toFixed(1)}</small>}
+          </dd>
+          <dt>Config</dt><dd><code>{decision.config_hash ?? "—"}</code>{decision.decided_on && <small> · {decision.decided_on}</small>}</dd>
+        </dl>
 
-      {features.length > 0 && (
-        <ul className="feature-bars" aria-label="Points per matching feature">
-          {features.map(([feature, points]) => (
-            <li key={feature}>
-              <span>{feature.replace(/_/g, " ")}</span>
-              <i style={{ width: `${(Math.abs(points) / maxPoints) * 100}%` }} className={points < 0 ? "is-penalty" : ""} />
-              <strong>{points > 0 ? "+" : ""}{points}</strong>
-            </li>
-          ))}
-        </ul>
-      )}
+        {features.length > 0 && (
+          <ul className="feature-bars" aria-label="Points per matching feature">
+            {features.map(([feature, points]) => (
+              <li key={feature}>
+                <span>{feature.replace(/_/g, " ")}</span>
+                <i style={{ width: `${(Math.abs(points) / maxPoints) * 100}%` }} className={points < 0 ? "is-penalty" : ""} />
+                <strong>{points > 0 ? "+" : ""}{points}</strong>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {decision.reason && <p className="decision-reason">{decision.reason}</p>}
 
       <div className="decision-reviews">
         <p className="profile-subhead">
@@ -250,7 +266,6 @@ export function DecisionCard({ decision, onOpenEntity }: { decision: MatchDecisi
           </ul>
         )}
         {decision.lei && <ReviewForm decision={decision} onSaved={(review) => setReviews((current) => [...current, review])} />}
-        <small className="decision-footnote">A review never edits the decision. It is stored separately and changes the graph link on the next knowledge-graph build.</small>
       </div>
     </article>
   );
@@ -259,7 +274,7 @@ export function DecisionCard({ decision, onOpenEntity }: { decision: MatchDecisi
 function Resolution({ detail, onOpenEntity }: { detail: EntityDetail; onOpenEntity: (lei: string) => void }) {
   if (detail.match_decisions.length === 0) return null;
   return (
-    <ProfileSection title="How other records were linked" hint="deterministic matcher, citable">
+    <ProfileSection title="How other records were linked" hint="A review is stored beside the decision, never over it">
       {detail.match_decisions.map((decision) => (
         <DecisionCard key={decision.node_id} decision={decision} onOpenEntity={onOpenEntity} />
       ))}
@@ -484,11 +499,14 @@ export default function EntityProfile({
   loading,
   onOpenEntity,
   view = "all",
+  showName = true,
 }: {
   detail: EntityDetail | null;
   loading: boolean;
   onOpenEntity: (lei: string) => void;
   view?: "all" | "overview" | "relationships" | "holdings" | "resolution";
+  /** Off where the page header already names the entity. */
+  showName?: boolean;
 }) {
   if (loading) {
     return <div id="entity-profile" className="entity-profile-loading"><Loader2 className="animate-spin" /> Opening entity profile…</div>;
@@ -505,7 +523,7 @@ export default function EntityProfile({
         <span>Entity profile</span>
         <a href={`https://search.gleif.org/#/search/lei/${detail.entity_id}`} target="_blank" rel="noreferrer">View in GLEIF ↗</a>
       </div>
-      <h2>{detail.canonical_name}</h2>
+      {showName && <h2>{detail.canonical_name}</h2>}
       {successor && (
         <button
           type="button"

@@ -102,6 +102,28 @@ def gleif_external_identifiers_sql(cfg: AppConfig) -> str | None:
     """
 
 
+def sec_adv_identifiers_sql(cfg: AppConfig) -> str | None:
+    """An adviser's CRD number, from Form ADV Part 1A filings that state the
+    adviser's own LEI (Item 1.P) - the filer's claim, not a match."""
+    path = cfg.sec_adv_firms.processed_dir / "sec_adv_firms.parquet"
+    if not path.exists():
+        return None
+    return f"""
+        SELECT
+            arg_max(lei, snapshot_date) AS entity_id,
+            'CRD' AS identifier_type,
+            crd_number AS identifier_value,
+            'SOURCE' AS confidence,
+            'sec_adv_firms' AS source,
+            arg_max(source_file, snapshot_date) AS source_file,
+            max(snapshot_date) AS snapshot_date,
+            arg_max(ingested_at, snapshot_date) AS ingested_at
+        FROM read_parquet('{path}')
+        WHERE lei IS NOT NULL
+        GROUP BY crd_number
+    """
+
+
 # Every source contributing identifiers to the canonical entity layer, in the
 # order their queries are unioned. Add a new source by writing one function
 # above and appending it here.
@@ -109,4 +131,5 @@ IDENTIFIER_SOURCES = [
     isin_identifiers_sql,
     gleif_external_identifiers_sql,
     sec_13f_identifiers_sql,
+    sec_adv_identifiers_sql,
 ]

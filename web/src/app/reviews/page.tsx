@@ -1,10 +1,10 @@
-import { Suspense } from "react";
 import ReviewQueue from "@/components/ReviewQueue";
-import { Loading } from "@/components/WorkspaceStates";
-export default function ReviewsPage() {
-  return (
-    <Suspense fallback={<Loading />}>
-      <ReviewQueue />
-    </Suspense>
-  );
+import { firstValues, type PageSearchParams } from "@/lib/search-params";
+
+export default async function ReviewsPage({
+  searchParams,
+}: {
+  searchParams: PageSearchParams;
+}) {
+  return <ReviewQueue searchParams={firstValues(await searchParams)} />;
 }

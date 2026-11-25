@@ -15,6 +15,7 @@ from er.config import (
     OpenSearchConfig,
     SearchConfig,
     Sec13FConfig,
+    SecAdvFirmsConfig,
 )
 from er.entity.build import build_entities, build_identifiers
 from er.entity.sources import isin_identifiers_sql, sec_13f_identifiers_sql
@@ -36,6 +37,7 @@ def cfg(tmp_path):
             isin_lei_zip="i.zip",
         ),
         sec_13f=Sec13FConfig(raw_dir=tmp_path / "sec_13f_raw", processed_dir=processed),
+        sec_adv_firms=SecAdvFirmsConfig(processed_dir=processed),
         entity=EntityConfig(processed_dir=processed),
         opensearch=OpenSearchConfig(index_name="test"),
         search=SearchConfig(),

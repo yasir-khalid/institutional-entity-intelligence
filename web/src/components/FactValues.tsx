@@ -105,34 +105,43 @@ export default function FactValues({
 }) {
   const used = Object.values(facts).filter((fact) => fact.evidence_id === evidenceId);
   if (used.length === 0) return null;
+  const shown = used.slice(0, 4);
+  const rest = used.slice(4);
+  const row = (fact: Fact) => {
+    const derivation = derivations[fact.fact_id];
+    return (
+      <li key={fact.fact_id}>
+        <div className="fact-row">
+          <span className="fact-name">{factLabel(fact.predicate)}</span>
+          <strong>{formatFactValue(fact)}</strong>
+        </div>
+        <details className="fact-lineage-toggle">
+          <summary>
+            <span className="fact-lineage-hint">{derivation ? "Computed · view lineage" : "View lineage"}</span>
+          </summary>
+          <LineageChain
+            fact={fact}
+            derivation={derivation}
+            evidence={evidence}
+            facts={facts}
+            derivations={derivations}
+          />
+        </details>
+      </li>
+    );
+  };
   return (
     <div className="fact-values">
-      <span className="fact-values-label">Values in this answer</span>
-      <ul>
-        {used.map((fact) => {
-          const derivation = derivations[fact.fact_id];
-          return (
-            <li key={fact.fact_id}>
-              <div className="fact-row">
-                <span className="fact-name">{factLabel(fact.predicate)}</span>
-                <strong>{formatFactValue(fact)}</strong>
-              </div>
-              <details className="fact-lineage-toggle">
-                <summary>
-                  <span className="fact-lineage-hint">{derivation ? "Computed · view lineage" : "View lineage"}</span>
-                </summary>
-                <LineageChain
-                  fact={fact}
-                  derivation={derivation}
-                  evidence={evidence}
-                  facts={facts}
-                  derivations={derivations}
-                />
-              </details>
-            </li>
-          );
-        })}
-      </ul>
+      <span className="fact-values-label">
+        Values in this answer · {used.length.toLocaleString()}
+      </span>
+      <ul>{shown.map(row)}</ul>
+      {rest.length > 0 && (
+        <details className="fact-more">
+          <summary>Show {rest.length.toLocaleString()} more values</summary>
+          <ul>{rest.map(row)}</ul>
+        </details>
+      )}
     </div>
   );
 }

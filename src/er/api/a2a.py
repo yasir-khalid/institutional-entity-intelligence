@@ -61,8 +61,9 @@ def build_agent_card(public_url: str, *, require_auth: bool) -> AgentCard:
         description=(
             "Answers questions about legal entities and institutions from public records: GLEIF "
             "identity and corporate hierarchy, SEC 13F reported holdings, 13D/G beneficial owners, "
-            "N-PORT funds, Form ADV, FFIEC bank control and Companies House. Every figure in an "
-            "answer is cited to a source record and the answer is independently verified."
+            "N-PORT funds and reverse N-PORT holders, SEC filing text, Form ADV, FFIEC bank control "
+            "and Companies House, plus a curated provisional registry for private SPVs. Every figure "
+            "in an answer is cited to a source record and the answer is independently verified."
         ),
         version="0.1.0",
         provider=AgentProvider(organization="Institutional Entity Intelligence", url=public_url),
@@ -78,15 +79,19 @@ def build_agent_card(public_url: str, *, require_auth: bool) -> AgentCard:
                 name="Entity research",
                 description=(
                     "Resolve an institution by name, LEI or CUSIP and answer questions about its "
-                    "identity, parents and subsidiaries, ownership, fund structure and latest "
-                    "reported 13F holdings. Put an LEI in message metadata as `entity_id` to scope "
-                    "the question to one entity."
+                    "identity, parents and subsidiaries, ownership, fund structure, latest reported "
+                    "13F holdings, reverse N-PORT holders, SEC filing passages, and provisional "
+                    "private-entity records for SPVs without an LEI. Put an LEI in message metadata "
+                    "as `entity_id` to scope the question to one entity."
                 ),
-                tags=["entity resolution", "LEI", "corporate hierarchy", "SEC 13F", "beneficial ownership"],
+                tags=["entity resolution", "LEI", "corporate hierarchy", "SEC 13F", "beneficial ownership",
+                      "N-PORT holders", "SEC filing text", "private entities"],
                 examples=[
                     "Who is the ultimate parent of BlackRock Fund Advisors?",
                     "What were Vanguard's largest 13F positions last quarter?",
                     "Who reports beneficial ownership of Apple Inc.?",
+                    "Who holds the Beignet Investor LLC notes?",
+                    "What did Meta disclose about its Beignet joint venture in its 10-Q?",
                 ],
             )
         ],

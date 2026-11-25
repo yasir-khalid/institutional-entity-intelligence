@@ -25,6 +25,14 @@ SOURCE_TABLES = (
     ("ffiec_nic", "FFIEC NIC", ("ffiec_nic_institutions", "ffiec_nic_relationships"), "Bank regulatory control; distinct from accounting consolidation"),
     ("sec_xbrl", "SEC XBRL", ("sec_xbrl_facts", "sec_xbrl_issuers"),
      "As-reported financial statement values; a 10-K/A restates rather than corrects"),
+    ("sec_adv_firms", "SEC Form ADV Part 1A", ("sec_adv_firms", "sec_adv_client_types"),
+     "Regulatory AUM is gross and includes uncalled commitments; it is not the AUM a manager markets"),
+    ("sec_form_d", "SEC Form D", ("sec_form_d_offerings", "sec_form_d_people", "sec_form_d_recipients"),
+     "Notices of exempt offerings; amounts sold are cumulative and self-reported, and amendments restate them"),
+    ("finra_short_volume", "FINRA short sale volume", ("finra_short_volume",),
+     "Daily volume of trades marked short on FINRA venues; not short interest, and market-maker hedging is included"),
+    ("sec_ftd", "SEC fails-to-deliver", ("sec_ftd",),
+     "Outstanding CNS fail balances by settlement date; balances, not new fails, so days must not be summed"),
 )
 
 

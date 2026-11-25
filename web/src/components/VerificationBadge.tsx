@@ -47,3 +47,25 @@ export default function VerificationBadge({ verification }: { verification: Veri
     </section>
   );
 }
+
+/** The same verdict, compact enough to sit beside "Research answer" so the
+ * reader sees the trust state before the prose, not after the chart. */
+export function VerificationPill({ verification }: { verification: Verification | null | undefined }) {
+  if (!verification) return null;
+  const { icon: Icon, label } = STATUS[verification.status];
+  const failed = verification.checks.filter((check) => check.passed === false).length;
+  const variant = verification.status === "verified"
+    ? "positive"
+    : verification.status === "unverified"
+      ? "critical"
+      : verification.status === "partial"
+        ? "caution"
+        : "neutral";
+  return (
+    <Badge variant={variant} className="max-w-full whitespace-normal text-left">
+      <Icon aria-hidden="true" />
+      {label}
+      {failed > 0 ? ` · ${failed} of ${verification.checks.length} checks` : ""}
+    </Badge>
+  );
+}
